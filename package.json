@@ -9,6 +9,14 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@mantine/core": "^8.3.13",
+    "@mantine/hooks": "^8.3.13",
+    "@mantine/modals": "^8.3.13",
+    "@mantine/notifications": "^8.3.13",
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.91.0",
+    "@tabler/icons-react": "^3.36.1",
+    "mantine-datatable": "^8.3.13",
     "next": "16.1.4",
     "react": "19.2.3",
     "react-dom": "19.2.3"
