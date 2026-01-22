@@ -8,7 +8,6 @@ import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
@@ -16,10 +15,7 @@ export default function SignupPage() {
     setLoading(true);
 
     const supabase = createSupabaseBrowserClient();
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
+    const { error } = await supabase.auth.signUp({ email, password });
 
     setLoading(false);
 
@@ -28,12 +24,7 @@ export default function SignupPage() {
       return;
     }
 
-    notifications.show({
-      title: 'Account created',
-      message: 'You can now sign in.',
-      color: 'green',
-    });
-
+    notifications.show({ title: 'Account created', message: 'Now sign in.', color: 'green' });
     window.location.href = '/login';
   }
 
@@ -42,7 +33,7 @@ export default function SignupPage() {
       <Stack gap="md">
         <Stack gap={4}>
           <Text fw={800} size="xl">Create account</Text>
-          <Text c="dimmed" size="sm">Dev signup (we’ll remove public signup later).</Text>
+          <Text c="dimmed" size="sm">Dev signup (we’ll remove this later).</Text>
         </Stack>
 
         <Paper withBorder p="lg" radius="md">

@@ -1,31 +1,11 @@
-
+'use client';
 
 import { AppShell, Burger, Group, Text, TextInput } from '@mantine/core';
 import { IconSearch } from '@tabler/icons-react';
 import { Suspense } from 'react';
-import { redirect } from 'next/navigation';
 import { AppNav } from './nav';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 
-export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const supabase = await createSupabaseServerClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect('/login');
-
-  // If user has no org membership, send to onboarding
-  const { data: membership } = await supabase
-    .from('org_members')
-    .select('org_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle();
-
-  if (!membership) redirect('/onboarding');
-
+export function AppShellClient({ children }: { children: React.ReactNode }) {
   return (
     <AppShell
       header={{ height: 56 }}
