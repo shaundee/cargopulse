@@ -1,35 +1,48 @@
 'use client';
+import { useRouter } from 'next/navigation';
 
 import { useState } from 'react';
 import { Button, Container, Paper, Stack, Text, TextInput } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 
+
 export default function OnboardingPage() {
+    
+    const router = useRouter();
   const [orgName, setOrgName] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
+ async function onSubmit(e: React.FormEvent) {
+  e.preventDefault();
+  setLoading(true);
 
-    const supabase = createSupabaseBrowserClient();
-    const { data, error } = await supabase.rpc('create_org_for_user', {
-      p_org_name: orgName,
+  try {
+    const res = await fetch('/api/onboarding/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orgName }),
     });
 
-    setLoading(false);
+    const json = await res.json();
 
-    if (error) {
-      notifications.show({ title: 'Onboarding failed', message: error.message, color: 'red' });
+    if (!res.ok) {
+      notifications.show({ title: 'Onboarding failed', message: json?.error ?? 'Unknown error', color: 'red' });
+      setLoading(false);
       return;
     }
-await fetch('/api/setup/default-templates', { method: 'POST' });
 
-notifications.show({ title: 'Organization created', message: 'Welcome.', color: 'green' });
-window.location.href = '/dashboard';
+    notifications.show({ title: 'Organization created', message: 'Welcome.', color: 'green' });
 
+    // Hard redirect is fine now because server has completed everything
+    window.location.href = '/dashboard';
+  } catch (err: any) {
+    notifications.show({ title: 'Onboarding failed', message: err?.message ?? 'Request failed', color: 'red' });
+  } finally {
+    setLoading(false);
   }
+}
+
 
   return (
     <Container size={520} py={80}>

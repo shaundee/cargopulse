@@ -1,10 +1,5 @@
-
-
-import { AppShell, Burger, Group, Text, TextInput } from '@mantine/core';
-import { IconSearch } from '@tabler/icons-react';
-import { Suspense } from 'react';
 import { redirect } from 'next/navigation';
-import { AppNav } from './nav';
+import { AppShellClient } from './app-shell';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -16,7 +11,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   if (!user) redirect('/login');
 
-  // If user has no org membership, send to onboarding
   const { data: membership } = await supabase
     .from('org_members')
     .select('org_id')
@@ -26,35 +20,5 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   if (!membership) redirect('/onboarding');
 
-  return (
-    <AppShell
-      header={{ height: 56 }}
-      navbar={{ width: 260, breakpoint: 'sm' }}
-      padding="md"
-    >
-      <AppShell.Header>
-        <Group h="100%" px="md" justify="space-between">
-          <Group gap="sm">
-            <Burger hiddenFrom="sm" size="sm" />
-            <Text fw={700}>CargoPulse</Text>
-          </Group>
-
-          <TextInput
-            placeholder="Search tracking code or phone…"
-            leftSection={<IconSearch size={16} />}
-            w={360}
-            visibleFrom="sm"
-          />
-        </Group>
-      </AppShell.Header>
-
-      <AppShell.Navbar p="md">
-        <Suspense fallback={null}>
-          <AppNav />
-        </Suspense>
-      </AppShell.Navbar>
-
-      <AppShell.Main>{children}</AppShell.Main>
-    </AppShell>
-  );
+  return <AppShellClient>{children}</AppShellClient>;
 }

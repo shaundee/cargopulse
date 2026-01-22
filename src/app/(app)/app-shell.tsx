@@ -1,8 +1,7 @@
 'use client';
 
-import { AppShell, Burger, Group, Text, TextInput } from '@mantine/core';
+import { AppShell, Group, Text, TextInput } from '@mantine/core';
 import { IconSearch } from '@tabler/icons-react';
-import { Suspense } from 'react';
 import { AppNav } from './nav';
 
 export function AppShellClient({ children }: { children: React.ReactNode }) {
@@ -14,11 +13,7 @@ export function AppShellClient({ children }: { children: React.ReactNode }) {
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
-          <Group gap="sm">
-            <Burger hiddenFrom="sm" size="sm" />
-            <Text fw={700}>CargoPulse</Text>
-          </Group>
-
+          <Text fw={700}>CargoPulse</Text>
           <TextInput
             placeholder="Search tracking code or phone…"
             leftSection={<IconSearch size={16} />}
@@ -29,9 +24,7 @@ export function AppShellClient({ children }: { children: React.ReactNode }) {
       </AppShell.Header>
 
       <AppShell.Navbar p="md">
-        <Suspense fallback={null}>
-          <AppNav />
-        </Suspense>
+        <AppNav />
       </AppShell.Navbar>
 
       <AppShell.Main>{children}</AppShell.Main>
