@@ -1,8 +1,22 @@
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { Card, Group, SimpleGrid, Text } from '@mantine/core';
 
-export default async function DashboardPage() {
-  const supabase = await createSupabaseServerClient();
-  const { data } = await supabase.auth.getUser();
+export default function DashboardPage() {
+  return (
+    <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
+      <Card withBorder radius="md" p="md">
+        <Text c="dimmed" size="sm">Shipments (30 days)</Text>
+        <Text fw={800} size="xl">0</Text>
+      </Card>
 
-  return <pre>{JSON.stringify(data.user, null, 2)}</pre>;
+      <Card withBorder radius="md" p="md">
+        <Text c="dimmed" size="sm">Delivered (30 days)</Text>
+        <Text fw={800} size="xl">0</Text>
+      </Card>
+
+      <Card withBorder radius="md" p="md">
+        <Text c="dimmed" size="sm">Messages sent (30 days)</Text>
+        <Text fw={800} size="xl">0</Text>
+      </Card>
+    </SimpleGrid>
+  );
 }
