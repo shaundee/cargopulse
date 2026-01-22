@@ -24,9 +24,11 @@ export default function OnboardingPage() {
       notifications.show({ title: 'Onboarding failed', message: error.message, color: 'red' });
       return;
     }
+await fetch('/api/setup/default-templates', { method: 'POST' });
 
-    notifications.show({ title: 'Organization created', message: 'Welcome.', color: 'green' });
-    window.location.href = '/dashboard';
+notifications.show({ title: 'Organization created', message: 'Welcome.', color: 'green' });
+window.location.href = '/dashboard';
+
   }
 
   return (
