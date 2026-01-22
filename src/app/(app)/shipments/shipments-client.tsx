@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import {
   Badge,
@@ -56,6 +57,17 @@ function statusColor(s: ShipmentStatus) {
 }
 
 export function ShipmentsClient({ initialShipments }: { initialShipments: ShipmentRow[] }) {
+      const router = useRouter();
+
+  const [form, setForm] = useState({
+    customerName: '',
+    phone: '',
+    destination: '',
+    serviceType: 'depot' as 'depot' | 'door_to_door',
+  });
+
+  const [saving, setSaving] = useState(false);
+
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<ShipmentRow[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -74,10 +86,46 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
     });
   }, [initialShipments, query]);
 
-  async function createShipment(e: React.FormEvent) {
-    e.preventDefault();
-    notifications.show({ title: 'Next step', message: 'We will wire the form to Supabase next.', color: 'blue' });
+async function createShipment(e: React.FormEvent) {
+  e.preventDefault();
+  setSaving(true);
+
+  try {
+    const res = await fetch('/api/shipments/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    });
+
+    const json = await res.json();
+
+    if (!res.ok) {
+      notifications.show({
+        title: 'Create failed',
+        message: json?.error ?? 'Unknown error',
+        color: 'red',
+      });
+      return;
+    }
+
+    notifications.show({
+      title: 'Shipment created',
+      message: `Tracking: ${json.trackingCode}`,
+      color: 'green',
+    });
+
+    setDrawerOpen(false);
+    setForm({ customerName: '', phone: '', destination: '', serviceType: 'depot' });
+
+    // Pull fresh server data (ShipmentsPage is server-rendered)
+    router.refresh();
+  } catch (err: any) {
+    notifications.show({ title: 'Create failed', message: err?.message ?? 'Request failed', color: 'red' });
+  } finally {
+    setSaving(false);
   }
+}
+
 
   return (
     <Stack gap="md">
@@ -133,21 +181,45 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
       <Drawer opened={drawerOpen} onClose={() => setDrawerOpen(false)} position="right" size="md" title="New shipment">
         <form onSubmit={createShipment}>
           <Stack gap="sm">
-            <TextInput label="Customer name" placeholder="e.g., Andre Brown" required />
-            <TextInput label="Phone" placeholder="+44..." required />
-            <TextInput label="Destination" placeholder="Kingston / St Catherine" required />
+       <TextInput
+  label="Customer name"
+  placeholder="e.g., Andre Brown"
+  value={form.customerName}
+  onChange={(e) => setForm((f) => ({ ...f, customerName: e.currentTarget.value }))}
+  required
+/>
 
-            <Select
-              label="Service type"
-              data={[
-                { value: 'depot', label: 'Depot' },
-                { value: 'door_to_door', label: 'Door to door' },
-              ]}
-              defaultValue="depot"
-              required
-            />
+<TextInput
+  label="Phone"
+  placeholder="+44..."
+  value={form.phone}
+  onChange={(e) => setForm((f) => ({ ...f, phone: e.currentTarget.value }))}
+  required
+/>
 
-            <Button type="submit">Create shipment</Button>
+<TextInput
+  label="Destination"
+  placeholder="Kingston / St Catherine"
+  value={form.destination}
+  onChange={(e) => setForm((f) => ({ ...f, destination: e.currentTarget.value }))}
+  required
+/>
+
+<Select
+  label="Service type"
+  data={[
+    { value: 'depot', label: 'Depot' },
+    { value: 'door_to_door', label: 'Door to door' },
+  ]}
+  value={form.serviceType}
+  onChange={(v) => setForm((f) => ({ ...f, serviceType: (v === 'door_to_door' ? 'door_to_door' : 'depot') }))}
+  required
+/>
+
+<Button type="submit" loading={saving}>
+  Create shipment
+</Button>
+
           </Stack>
         </form>
       </Drawer>
