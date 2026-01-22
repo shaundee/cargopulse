@@ -25,27 +25,31 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
+ const pathname = request.nextUrl.pathname
   const isAppRoute =
-    request.nextUrl.pathname.startsWith('/dashboard') ||
-    request.nextUrl.pathname.startsWith('/shipments') ||
-    request.nextUrl.pathname.startsWith('/customers') ||
-    request.nextUrl.pathname.startsWith('/messages') ||
-    request.nextUrl.pathname.startsWith('/pod') ||
-    request.nextUrl.pathname.startsWith('/settings');
-
+  pathname.startsWith('/dashboard') ||
+  pathname.startsWith('/shipments') ||
+  pathname.startsWith('/customers') ||
+  pathname.startsWith('/messages') ||
+  pathname.startsWith('/pod') ||
+  pathname.startsWith('/settings');
+                  
   if (isAppRoute && !user) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
-    url.searchParams.set('next', request.nextUrl.pathname);
+    url.searchParams.set('next', pathname);
     return NextResponse.redirect(url);
   }
 
-  if (request.nextUrl.pathname === '/login' && user) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/dashboard';
-    return NextResponse.redirect(url);
-  }
+const isAuthPage =
+ pathname === '/login' ||
+ pathname === '/signup';
+
+if (isAuthPage && !user) {
+  const url = request.nextUrl.clone();
+  url.pathname = '/dashboard';
+  return NextResponse.redirect(url);
+}
 
   return response;
 }
