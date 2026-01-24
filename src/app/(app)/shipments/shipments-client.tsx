@@ -84,13 +84,20 @@ function formatWhen(v: unknown) {
   return d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : '-';
 }
 
+type TemplateRow = {
+  id: string;
+  status: ShipmentStatus;
+  name: string;
+  body: string;
+  enabled: boolean;
+};
+
 export function ShipmentsClient({ initialShipments }: { initialShipments: ShipmentRow[] }) {
   const router = useRouter();
 
   // --- Create shipment drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-
   const [form, setForm] = useState<NewShipmentForm>({
     customerName: '',
     phone: '',
@@ -112,6 +119,11 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
   const [eventStatus, setEventStatus] = useState<ShipmentStatus>('received');
   const [eventNote, setEventNote] = useState('');
   const [eventSaving, setEventSaving] = useState(false);
+
+  // --- Send update state
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [sendTemplateId, setSendTemplateId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
 
   const records = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -187,23 +199,49 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
     setDetailOpen(true);
     setDetailLoading(true);
 
+    // reset send UI each time drawer opens
+    setTemplates([]);
+    setSendTemplateId(null);
+
     try {
+      // Load shipment detail + timeline
       const res = await fetch(`/api/shipments/detail?shipment_id=${encodeURIComponent(shipmentId)}`);
 
-      const contentType = res.headers.get('content-type') || '';
-      const isJson = contentType.includes('application/json');
-      const payload = isJson ? await res.json() : await res.text();
+      {
+        const contentType = res.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+        const payload = isJson ? await res.json() : await res.text();
 
-      if (!res.ok) {
-        throw new Error(
-          isJson ? (payload?.error ?? `Failed to load (${res.status})`) : `Failed to load (${res.status})`
-        );
+        if (!res.ok) {
+          throw new Error(
+            isJson ? (payload?.error ?? `Failed to load (${res.status})`) : `Failed to load (${res.status})`
+          );
+        }
+
+        setDetailShipment(payload.shipment);
+        setDetailEvents(payload.events ?? []);
+        setEventStatus(payload.shipment?.current_status ?? 'received');
+        setEventNote('');
+
+        // Load templates for Send update + auto-select best match
+        try {
+          const tRes = await fetch('/api/message-templates');
+          const tCt = tRes.headers.get('content-type') || '';
+          const tIsJson = tCt.includes('application/json');
+          const tPayload = tIsJson ? await tRes.json() : await tRes.text();
+
+          if (tRes.ok && tIsJson) {
+            const list: TemplateRow[] = (tPayload.templates ?? []) as TemplateRow[];
+            setTemplates(list);
+
+            const status = String(payload.shipment?.current_status ?? '');
+            const match = list.find((t) => t.enabled && t.status === status);
+            setSendTemplateId(match?.id ?? null);
+          }
+        } catch {
+          // ignore template load errors; user can still update status/timeline
+        }
       }
-
-      setDetailShipment(payload.shipment);
-      setDetailEvents(payload.events ?? []);
-      setEventStatus(payload.shipment?.current_status ?? 'received');
-      setEventNote('');
     } catch (e: any) {
       notifications.show({
         title: 'Load failed',
@@ -257,6 +295,44 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
       });
     } finally {
       setEventSaving(false);
+    }
+  }
+
+  async function sendUpdate() {
+    if (!detailShipment?.id || !sendTemplateId) return;
+
+    setSending(true);
+    try {
+      const res = await fetch('/api/messages/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shipmentId: detailShipment.id,
+          templateId: sendTemplateId,
+        }),
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const payload = isJson ? await res.json() : await res.text();
+
+      if (!res.ok) {
+        throw new Error(isJson ? (payload?.error ?? `Send failed (${res.status})`) : `Send failed (${res.status})`);
+      }
+
+      notifications.show({
+        title: 'Sent (logged)',
+        message: 'Message saved to logs',
+        color: 'green',
+      });
+    } catch (e: any) {
+      notifications.show({
+        title: 'Send failed',
+        message: e?.message ?? 'Could not send message',
+        color: 'red',
+      });
+    } finally {
+      setSending(false);
     }
   }
 
@@ -317,13 +393,7 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
       </Paper>
 
       {/* Create shipment drawer */}
-      <Drawer
-        opened={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        position="right"
-        size="md"
-        title="New shipment"
-      >
+      <Drawer opened={drawerOpen} onClose={() => setDrawerOpen(false)} position="right" size="md" title="New shipment">
         <form onSubmit={createShipment}>
           <Stack gap="sm">
             <TextInput
@@ -397,6 +467,7 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
             <Text c="dimmed">No shipment loaded</Text>
           ) : (
             <>
+              {/* Summary */}
               <Paper withBorder p="sm" radius="md">
                 <Stack gap={4}>
                   <Text fw={700}>
@@ -419,6 +490,7 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
                 </Stack>
               </Paper>
 
+              {/* Add status update */}
               <Paper withBorder p="sm" radius="md">
                 <Stack gap="xs">
                   <Text fw={700}>Add status update</Text>
@@ -450,6 +522,32 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
                 </Stack>
               </Paper>
 
+              {/* Send update */}
+              <Paper withBorder p="sm" radius="md">
+                <Stack gap="xs">
+                  <Text fw={700}>Send update</Text>
+
+                  <Select
+                    label="Template"
+                    data={templates
+                      .filter((t) => t.enabled)
+                      .map((t) => ({ value: t.id, label: `${t.status} • ${t.name}` }))}
+                    value={sendTemplateId}
+                    onChange={(v) => setSendTemplateId(v)}
+                    placeholder="Choose a template"
+                  />
+
+                  <Button onClick={sendUpdate} loading={sending} disabled={!sendTemplateId}>
+                    Send (log)
+                  </Button>
+
+                  <Text size="sm" c="dimmed">
+                    This logs the rendered message in message_logs. WhatsApp sending comes next.
+                  </Text>
+                </Stack>
+              </Paper>
+
+              {/* Timeline */}
               <Paper withBorder p="sm" radius="md">
                 <Text fw={700} mb="xs">
                   Timeline

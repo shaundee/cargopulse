@@ -1,0 +1,200 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { Badge, Button, Drawer, Group, Paper, Stack, Switch, Text, TextInput, Textarea, Select } from '@mantine/core';
+import { DataTable } from 'mantine-datatable';
+import { notifications } from '@mantine/notifications';
+
+type ShipmentStatus =
+  | 'received'
+  | 'loaded'
+  | 'departed_uk'
+  | 'arrived_jamaica'
+  | 'out_for_delivery'
+  | 'delivered';
+
+type TemplateRow = {
+  id: string;
+  status: ShipmentStatus;
+  name: string;
+  body: string;
+  enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+const STATUS_OPTIONS = [
+  { value: 'received', label: 'Received' },
+  { value: 'loaded', label: 'Loaded' },
+  { value: 'departed_uk', label: 'Departed UK' },
+  { value: 'arrived_jamaica', label: 'Arrived Jamaica' },
+  { value: 'out_for_delivery', label: 'Out for delivery' },
+  { value: 'delivered', label: 'Delivered' },
+] as const;
+
+export function MessagesClient() {
+  const [loading, setLoading] = useState(false);
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [query, setQuery] = useState('');
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editing, setEditing] = useState<TemplateRow | null>(null);
+
+  const [form, setForm] = useState({
+    status: 'received' as ShipmentStatus,
+    name: '',
+    body: '',
+    enabled: true,
+  });
+
+  async function loadTemplates() {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/message-templates');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to load templates');
+      setTemplates(data.templates ?? []);
+    } catch (e: any) {
+      notifications.show({ title: 'Load failed', message: e?.message ?? 'Error', color: 'red' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTemplates();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    if (!q) return templates;
+    return templates.filter((t) =>
+      t.name.toLowerCase().includes(q) ||
+      t.status.toLowerCase().includes(q) ||
+      t.body.toLowerCase().includes(q)
+    );
+  }, [templates, query]);
+
+  function openNew() {
+    setEditing(null);
+    setForm({ status: 'received', name: '', body: '', enabled: true });
+    setDrawerOpen(true);
+  }
+
+  function openEdit(t: TemplateRow) {
+    setEditing(t);
+    setForm({ status: t.status, name: t.name, body: t.body, enabled: t.enabled });
+    setDrawerOpen(true);
+  }
+
+  async function saveTemplate() {
+    try {
+      const endpoint = editing ? '/api/message-templates/update' : '/api/message-templates';
+      const payload = editing ? { id: editing.id, ...form } : form;
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const ct = res.headers.get('content-type') || '';
+      const isJson = ct.includes('application/json');
+      const data = isJson ? await res.json() : await res.text();
+
+      if (!res.ok) throw new Error(isJson ? (data?.error ?? 'Save failed') : 'Save failed');
+
+      notifications.show({ title: 'Saved', message: 'Template updated', color: 'green' });
+      setDrawerOpen(false);
+      await loadTemplates();
+    } catch (e: any) {
+      notifications.show({ title: 'Save failed', message: e?.message ?? 'Error', color: 'red' });
+    }
+  }
+
+  return (
+    <Stack gap="md">
+      <Group justify="space-between">
+        <Stack gap={2}>
+          <Text fw={700} size="lg">Messages</Text>
+          <Text c="dimmed" size="sm">Edit message templates for each shipment status.</Text>
+        </Stack>
+
+        <Button onClick={openNew}>New template</Button>
+      </Group>
+
+      <Paper p="md" withBorder radius="md">
+        <Group mb="sm" justify="space-between" wrap="wrap">
+          <TextInput
+            placeholder="Search templates…"
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+            w={360}
+          />
+        </Group>
+
+        <DataTable
+          records={filtered}
+          fetching={loading}
+          withTableBorder
+          withColumnBorders
+          highlightOnHover
+          idAccessor="id"
+          columns={[
+            { accessor: 'status', title: 'Status', render: (r) => <Badge variant="light">{r.status}</Badge> },
+            { accessor: 'name', title: 'Name' },
+            { accessor: 'enabled', title: 'Enabled', render: (r) => (r.enabled ? 'Yes' : 'No') },
+            { accessor: 'body', title: 'Body', render: (r) => <Text size="sm" lineClamp={2}>{r.body}</Text> },
+          ]}
+          onRowClick={({ record }) => openEdit(record)}
+        />
+      </Paper>
+
+      <Drawer
+        opened={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        position="right"
+        size="lg"
+        title={editing ? 'Edit template' : 'New template'}
+      >
+        <Stack gap="sm">
+          <Select
+            label="Status"
+            data={STATUS_OPTIONS as any}
+            value={form.status}
+            onChange={(v) => setForm((f) => ({ ...f, status: (v ?? 'received') as ShipmentStatus }))}
+          />
+
+          <TextInput
+            label="Name"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.currentTarget.value }))}
+            placeholder="e.g., Standard update"
+          />
+
+          <Textarea
+            label="Message body"
+            value={form.body}
+            onChange={(e) => setForm((f) => ({ ...f, body: e.currentTarget.value }))}
+            minRows={6}
+            placeholder={
+              'Hi {{customer_name}}, your shipment {{tracking_code}} is now {{status}}. Destination: {{destination}}.'
+            }
+          />
+
+          <Switch
+            checked={form.enabled}
+            onChange={(e) => setForm((f) => ({ ...f, enabled: e.currentTarget.checked }))}
+            label="Enabled"
+          />
+
+          <Button onClick={saveTemplate}>Save</Button>
+
+          <Text size="sm" c="dimmed">
+            Variables: {'{{customer_name}}'} {'{{tracking_code}}'} {'{{status}}'} {'{{destination}}'}
+          </Text>
+        </Stack>
+      </Drawer>
+    </Stack>
+  );
+}
