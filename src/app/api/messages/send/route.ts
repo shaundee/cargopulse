@@ -31,7 +31,7 @@ export async function POST(req: Request) {
   // Load template
 const { data: tpl, error: tplErr } = await supabase
   .from('message_templates')
-  .select('id, org_id, status, name, body, enabled')
+  .select('id, org_id, status, body, enabled')
   .eq('id', templateId)
   .eq('org_id', shipment.org_id)
   .maybeSingle();
@@ -48,29 +48,35 @@ const { data: tpl, error: tplErr } = await supabase
 const customerName = customer?.name ?? '';
 const customerPhone = customer?.phone ?? '';
 
-  const rendered = renderTemplate(String(tpl.body ?? ''), {
-    customer_name: customerName,
-    tracking_code: shipment.tracking_code ?? '',
-    destination: shipment.destination ?? '',
-    status: shipment.current_status ?? '',
-  });
+const rendered = renderTemplate(String(tpl.body ?? ''), {
+  // preferred keys
+  customer_name: customerName,
+  tracking_code: shipment.tracking_code ?? '',
+  destination: shipment.destination ?? '',
+  status: shipment.current_status ?? '',
+
+  // backwards-compat / seeded templates
+  name: customerName,
+  code: shipment.tracking_code ?? '',
+});
+
 
   // For now: LOG ONLY (no WhatsApp provider yet)
-  const { data: log, error: logErr } = await supabase
-    .from('message_logs')
-    .insert({
-      shipment_id: shipment.id,
-      template_id: tpl.id,
-      to_phone: customerPhone,
-      channel: 'whatsapp',
-      status: shipment.current_status,
-      body: rendered,
-      created_by: user.id,
-      org_id: shipment.org_id,
-
-    })
-    .select('id, created_at')
-    .single();
+ const { data: log, error: logErr } = await supabase
+  .from('message_logs')
+  .insert({
+    org_id: shipment.org_id,
+    shipment_id: shipment.id,
+    template_id: tpl.id,
+    to_phone: customerPhone,
+    provider: 'whatsapp',
+    send_status: 'logged',      // we are not actually sending yet
+    body: rendered,
+    status: shipment.current_status ?? null,
+    sent_at: new Date().toISOString(),
+  })
+  .select('id')
+  .single();
 
   if (logErr) return NextResponse.json({ error: logErr.message }, { status: 400 });
 

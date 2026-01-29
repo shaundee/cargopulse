@@ -7,21 +7,20 @@ export async function POST(req: Request) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body = await req.json().catch(() => null);
-  const id = String(body?.id ?? '').trim();
+  const input = await req.json().catch(() => null);
+  const id = String(input?.id ?? '').trim();
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
 
   const patch: any = {};
-  if (body?.status != null) patch.status = String(body.status).trim();
-  if (body?.name != null) patch.name = String(body.name).trim();
-  if (body?.body != null) patch.body = String(body.body).trim();
-  if (body?.enabled != null) patch.enabled = !!body.enabled;
+  if (input?.status != null) patch.status = String(input.status).trim();
+  if (input?.body != null) patch.body = String(input.body).trim();
+  if (input?.enabled != null) patch.enabled = !!input.enabled;
 
   const { data, error } = await supabase
     .from('message_templates')
     .update(patch)
     .eq('id', id)
-    .select('id, status, name, body, enabled, created_at, updated_at')
+    .select('id, org_id, status, body, enabled, created_at')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

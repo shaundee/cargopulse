@@ -1,3 +1,5 @@
-export default function MessagesPage() {
-  return <div>Messages</div>;
+import { MessagesClient } from './messages-client';
+
+export default async function MessagesPage() {
+  return <MessagesClient />;
 }

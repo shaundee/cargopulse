@@ -16,7 +16,6 @@ type ShipmentStatus =
 type TemplateRow = {
   id: string;
   status: ShipmentStatus;
-  name: string;
   body: string;
   enabled: boolean;
   created_at?: string;
@@ -42,7 +41,6 @@ export function MessagesClient() {
 
   const [form, setForm] = useState({
     status: 'received' as ShipmentStatus,
-    name: '',
     body: '',
     enabled: true,
   });
@@ -68,8 +66,8 @@ export function MessagesClient() {
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
     if (!q) return templates;
+
     return templates.filter((t) =>
-      t.name.toLowerCase().includes(q) ||
       t.status.toLowerCase().includes(q) ||
       t.body.toLowerCase().includes(q)
     );
@@ -77,13 +75,13 @@ export function MessagesClient() {
 
   function openNew() {
     setEditing(null);
-    setForm({ status: 'received', name: '', body: '', enabled: true });
+    setForm({ status: 'received', body: '', enabled: true });
     setDrawerOpen(true);
   }
 
   function openEdit(t: TemplateRow) {
     setEditing(t);
-    setForm({ status: t.status, name: t.name, body: t.body, enabled: t.enabled });
+    setForm({ status: t.status, body: t.body, enabled: t.enabled });
     setDrawerOpen(true);
   }
 
@@ -142,7 +140,6 @@ export function MessagesClient() {
           idAccessor="id"
           columns={[
             { accessor: 'status', title: 'Status', render: (r) => <Badge variant="light">{r.status}</Badge> },
-            { accessor: 'name', title: 'Name' },
             { accessor: 'enabled', title: 'Enabled', render: (r) => (r.enabled ? 'Yes' : 'No') },
             { accessor: 'body', title: 'Body', render: (r) => <Text size="sm" lineClamp={2}>{r.body}</Text> },
           ]}
@@ -163,14 +160,10 @@ export function MessagesClient() {
             data={STATUS_OPTIONS as any}
             value={form.status}
             onChange={(v) => setForm((f) => ({ ...f, status: (v ?? 'received') as ShipmentStatus }))}
+            disabled={!!editing}
           />
 
-          <TextInput
-            label="Name"
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.currentTarget.value }))}
-            placeholder="e.g., Standard update"
-          />
+          
 
           <Textarea
             label="Message body"
@@ -190,9 +183,10 @@ export function MessagesClient() {
 
           <Button onClick={saveTemplate}>Save</Button>
 
-          <Text size="sm" c="dimmed">
-            Variables: {'{{customer_name}}'} {'{{tracking_code}}'} {'{{status}}'} {'{{destination}}'}
-          </Text>
+   <Text size="sm" c="dimmed">
+  Variables: {'{{name}}'} {'{{code}}'} {'{{customer_name}}'} {'{{tracking_code}}'} {'{{destination}}'} {'{{status}}'}
+</Text>
+
         </Stack>
       </Drawer>
     </Stack>

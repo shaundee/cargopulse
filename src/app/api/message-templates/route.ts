@@ -9,9 +9,8 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from('message_templates')
-    .select('id, status, name, body, enabled, created_at, updated_at')
-    .order('status', { ascending: true })
-    .order('name', { ascending: true });
+    .select('id, org_id, status, body, enabled, created_at')
+    .order('status', { ascending: true });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   return NextResponse.json({ templates: data ?? [] });
@@ -23,20 +22,36 @@ export async function POST(req: Request) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body = await req.json().catch(() => null);
-  const status = String(body?.status ?? '').trim();
-  const name = String(body?.name ?? '').trim();
-  const templateBody = String(body?.body ?? '').trim();
-  const enabled = body?.enabled === false ? false : true;
+  const input = await req.json().catch(() => null);
+
+  const status = String(input?.status ?? '').trim();
+  const body = String(input?.body ?? '').trim();
+  const enabled = input?.enabled === false ? false : true;
 
   if (!status) return NextResponse.json({ error: 'status is required' }, { status: 400 });
-  if (!name) return NextResponse.json({ error: 'name is required' }, { status: 400 });
-  if (!templateBody) return NextResponse.json({ error: 'body is required' }, { status: 400 });
+  if (!body) return NextResponse.json({ error: 'body is required' }, { status: 400 });
 
+  // Get user's org_id (same pattern as other endpoints)
+  const { data: membership, error: memErr } = await supabase
+    .from('org_members')
+    .select('org_id')
+    .eq('user_id', user.id)
+    .limit(1)
+    .maybeSingle();
+
+  if (memErr) return NextResponse.json({ error: memErr.message }, { status: 400 });
+  if (!membership?.org_id) return NextResponse.json({ error: 'No organization membership' }, { status: 400 });
+
+  const orgId = membership.org_id as string;
+
+  // Your schema is unique(org_id, status) so we upsert by that constraint
   const { data, error } = await supabase
     .from('message_templates')
-    .insert({ status, name, body: templateBody, enabled })
-    .select('id, status, name, body, enabled, created_at, updated_at')
+    .upsert(
+      { org_id: orgId, status, body, enabled },
+      { onConflict: 'org_id,status' }
+    )
+    .select('id, org_id, status, body, enabled, created_at')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

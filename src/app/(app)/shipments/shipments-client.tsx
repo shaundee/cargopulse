@@ -14,6 +14,8 @@ import {
   Text,
   TextInput,
   Select,
+  Checkbox,
+  FileInput
 } from '@mantine/core';
 import type { MantineColor } from '@mantine/core';
 
@@ -114,11 +116,22 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailShipment, setDetailShipment] = useState<any>(null);
   const [detailEvents, setDetailEvents] = useState<any[]>([]);
+  const [detailLogs, setDetailLogs] = useState<any[]>([]);
+  const [detailLogsLoading, setDetailLogsLoading] = useState(false);
+
+  //POD State
+  const [podReceiver, setPodReceiver] = useState('');
+  const [podFile, setPodFile] = useState<File | null>(null);
+  const [podSaving, setPodSaving] = useState(false);
+
 
   // --- Add event state
   const [eventStatus, setEventStatus] = useState<ShipmentStatus>('received');
   const [eventNote, setEventNote] = useState('');
   const [eventSaving, setEventSaving] = useState(false);
+  
+  const [autoLog, setAutoLog] = useState(true);
+
 
   // --- Send update state
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
@@ -195,9 +208,12 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
     }
   }
 
+// openShipmentsDetails
   async function openShipmentDetail(shipmentId: string) {
     setDetailOpen(true);
     setDetailLoading(true);
+    setDetailLogs([]);
+
 
     // reset send UI each time drawer opens
     setTemplates([]);
@@ -205,13 +221,38 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
 
     try {
       // Load shipment detail + timeline
-      const res = await fetch(`/api/shipments/detail?shipment_id=${encodeURIComponent(shipmentId)}`);
-
-      {
+        const res = await fetch(`/api/shipments/detail?shipment_id=${encodeURIComponent(shipmentId)}`);
+        
         const contentType = res.headers.get('content-type') || '';
         const isJson = contentType.includes('application/json');
-        const payload = isJson ? await res.json() : await res.text();
+        const payload = isJson ? await res.json() : await res.text();    
+        
+        setDetailShipment(payload.shipment);
+        setDetailEvents(payload.events ?? []);
 
+        // Load message logs
+setDetailLogsLoading(true);
+try {
+  const lRes = await fetch(`/api/messages/logs?shipment_id=${encodeURIComponent(shipmentId)}`);
+
+  const lCt = lRes.headers.get('content-type') || '';
+  const lIsJson = lCt.includes('application/json');
+  const lPayload = lIsJson ? await lRes.json() : await lRes.text();
+
+  if (lRes.ok && lIsJson) {
+    setDetailLogs(lPayload.logs ?? []);
+  } else {
+    setDetailLogs([]);
+  }
+} catch {
+  setDetailLogs([]);
+} finally {
+  setDetailLogsLoading(false);
+}
+
+
+      {
+        
         if (!res.ok) {
           throw new Error(
             isJson ? (payload?.error ?? `Failed to load (${res.status})`) : `Failed to load (${res.status})`
@@ -252,6 +293,7 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
     } finally {
       setDetailLoading(false);
     }
+    
   }
 
   async function addEvent() {
@@ -285,8 +327,24 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
         color: 'green',
       });
 
+      if (autoLog) {
+  const match = templates.find((t: any) => t.enabled && t.status === eventStatus);
+  if (match?.id) {
+    await fetch('/api/messages/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shipmentId: detailShipment.id,
+        templateId: match.id,
+      }),
+    });
+  }
+}
+
       router.refresh();
+
       await openShipmentDetail(detailShipment.id);
+
     } catch (e: any) {
       notifications.show({
         title: 'Update failed',
@@ -325,6 +383,9 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
         message: 'Message saved to logs',
         color: 'green',
       });
+
+      await openShipmentDetail(detailShipment.id);
+
     } catch (e: any) {
       notifications.show({
         title: 'Send failed',
@@ -335,6 +396,10 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
       setSending(false);
     }
   }
+
+const existingPod = Array.isArray(detailShipment?.pod)
+  ? detailShipment.pod[0]
+  : detailShipment?.pod;
 
   return (
     <Stack gap="md">
@@ -515,6 +580,13 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
                     onChange={(e) => setEventNote(e.currentTarget.value)}
                     placeholder="e.g., Loaded onto container #12"
                   />
+                  <Checkbox
+                   label="Log message using template for this status"
+                   checked={autoLog}
+                   onChange={(e) => setAutoLog(e.currentTarget.checked)}
+                 />
+
+                  
 
                   <Button onClick={addEvent} loading={eventSaving}>
                     Save update
@@ -531,7 +603,7 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
                     label="Template"
                     data={templates
                       .filter((t) => t.enabled)
-                      .map((t) => ({ value: t.id, label: `${t.status} • ${t.name}` }))}
+                      .map((t) => ({ value: t.id, label: statusLabel(t.status) }))}
                     value={sendTemplateId}
                     onChange={(v) => setSendTemplateId(v)}
                     placeholder="Choose a template"
@@ -546,6 +618,164 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
                   </Text>
                 </Stack>
               </Paper>
+
+              {/* message history*/}
+
+              <Paper withBorder p="sm" radius="md">
+  <Group justify="space-between" mb="xs">
+    <Text fw={700}>Message history</Text>
+    <Text size="sm" c="dimmed">
+      Last 20
+    </Text>
+  </Group>
+
+  {detailLogsLoading ? (
+    <Text size="sm" c="dimmed">Loading…</Text>
+  ) : detailLogs.length === 0 ? (
+    <Text size="sm" c="dimmed">No messages logged yet</Text>
+  ) : (
+    <Stack gap="xs">
+      {detailLogs.map((log) => (
+        <Paper key={log.id} withBorder p="sm" radius="md">
+          <Group justify="space-between" align="flex-start">
+            <Stack gap={2} style={{ flex: 1 }}>
+              <Group gap="xs">
+                <Badge variant="light">{String(log.send_status ?? 'unknown')}</Badge>
+                <Badge variant="light" color="gray">{String(log.provider ?? 'provider')}</Badge>
+                {log.status ? (
+                  <Badge variant="light" color="blue">{statusLabel(log.status)}</Badge>
+                ) : null}
+              </Group>
+
+              <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                {String(log.body ?? '')}
+              </Text>
+
+              {log.error ? (
+                <Text size="sm" c="red">
+                  {String(log.error)}
+                </Text>
+              ) : null}
+
+              <Text size="xs" c="dimmed">
+                To: {String(log.to_phone ?? '-') }
+              </Text>
+            </Stack>
+
+            <Text size="sm" c="dimmed">
+              {formatWhen(log.created_at)}
+            </Text>
+          </Group>
+        </Paper>
+      ))}
+    </Stack>
+  )}
+</Paper>
+
+  {/* POD */}
+  
+{existingPod ? (
+  <Paper withBorder p="sm" radius="md">
+    <Group justify="space-between" mb="xs">
+      <Text fw={700}>Proof of delivery</Text>
+      <Badge color="green" variant="light">Saved</Badge>
+    </Group>
+
+    <Text size="sm" c="dimmed">
+      Receiver: {existingPod.receiver_name ?? '-'}
+    </Text>
+    <Text size="sm" c="dimmed">
+      Delivered: {formatWhen(existingPod.delivered_at)}
+    </Text>
+
+    <Text size="sm" c="dimmed">
+      Photo path: {existingPod.photo_url ?? '-'}
+    </Text>
+  </Paper>
+) : null}
+
+
+            
+              <Paper withBorder p="sm" radius="md">
+  <Text fw={700} mb="xs">Proof of delivery</Text>
+
+  <Stack gap="sm">
+    <TextInput
+      label="Receiver name"
+      value={podReceiver}
+      onChange={(e) => setPodReceiver(e.currentTarget.value)}
+      placeholder="e.g., Marsha Brown"
+    />
+
+    <FileInput
+      label="Photo"
+      placeholder="Choose image…"
+      accept="image/*"
+      value={podFile}
+      onChange={setPodFile}
+    />
+
+    <Button
+      loading={podSaving}
+      disabled={!detailShipment?.id || !podReceiver || !podFile}
+      onClick={async () => {
+        if (!detailShipment?.id || !podFile) return;
+
+        setPodSaving(true);
+        try {
+          const fd = new FormData();
+          fd.append('shipmentId', detailShipment.id);
+          fd.append('receiverName', podReceiver);
+          fd.append('file', podFile);
+
+          const res = await fetch('/api/pod/complete', { method: 'POST', body: fd });
+
+          const ct = res.headers.get('content-type') || '';
+          const isJson = ct.includes('application/json');
+          const payload = isJson ? await res.json() : await res.text();
+
+          if (!res.ok) {
+            throw new Error(isJson ? (payload?.error ?? `Failed (${res.status})`) : `Failed (${res.status})`);
+          }
+
+          notifications.show({ title: 'POD saved', message: 'Shipment marked delivered', color: 'green' });
+
+          setPodReceiver('');
+          setPodFile(null);
+
+          await openShipmentDetail(detailShipment.id);
+          router.refresh();
+        } catch (e: any) {
+          notifications.show({ title: 'POD failed', message: e?.message ?? 'Failed', color: 'red' });
+        } finally {
+          setPodSaving(false);
+        }
+
+        try {
+  const deliveredTpl = templates.find((t: any) => t.enabled && t.status === 'delivered');
+  if (deliveredTpl?.id) {
+    await fetch('/api/messages/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shipmentId: detailShipment.id,
+        templateId: deliveredTpl.id,
+      }),
+    });
+  }
+} catch {}
+      }}
+    >
+      Save POD
+    </Button>
+
+    <Text size="sm" c="dimmed">
+      Uploads a photo, saves receiver name, and marks the shipment as delivered.
+    </Text>
+  </Stack>
+</Paper>
+
+ 
 
               {/* Timeline */}
               <Paper withBorder p="sm" radius="md">

@@ -13,7 +13,11 @@ export async function GET(req: Request) {
 
   const { data: shipment, error: shipErr } = await supabase
     .from('shipments')
-    .select('id, tracking_code, destination, service_type, current_status, last_event_at, created_at, customers(name, phone)')
+    .select(`
+  id, org_id, tracking_code, destination, current_status, service_type, last_event_at,
+  customers(name, phone),
+  pod:pod(shipment_id, receiver_name, photo_url, delivered_at)
+`)
     .eq('id', shipmentId)
     .maybeSingle();
 
