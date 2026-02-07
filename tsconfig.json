@@ -29,6 +29,6 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-  ],
+, "src/app/(app)/shipments/components/ShipmentDetailDrawer"  ],
   "exclude": ["node_modules"]
 }

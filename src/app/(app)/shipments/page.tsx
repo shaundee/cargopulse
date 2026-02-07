@@ -1,6 +1,6 @@
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import { ShipmentsClient } from './shipments-client';
+import  {ShipmentsClient}  from './shipments-client';
 
 export default async function ShipmentsPage() {
   const supabase = await createSupabaseServerClient();

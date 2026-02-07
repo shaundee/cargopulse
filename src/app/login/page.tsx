@@ -30,6 +30,7 @@ export default function LoginPage() {
 
     window.location.href = nextPath;
   }
+console.log("SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
 
   return (
     <Container size={420} py={80}>

@@ -69,7 +69,7 @@ const rendered = renderTemplate(String(tpl.body ?? ''), {
     shipment_id: shipment.id,
     template_id: tpl.id,
     to_phone: customerPhone,
-    provider: 'whatsapp',
+    provider: 'log',
     send_status: 'logged',      // we are not actually sending yet
     body: rendered,
     status: shipment.current_status ?? null,
