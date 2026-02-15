@@ -3,11 +3,11 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 function makeTrackingCode() {
-  // e.g. JAM-6H2K9Q (fast + human-friendly)
+  // e.g. SHP-6H2K9Q (fast + human-friendly)
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let s = '';
   for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return `JAM-${s}`;
+  return `SHP-${s}`;
 }
 
 export async function POST(req: Request) {
@@ -25,6 +25,9 @@ export async function POST(req: Request) {
   const phone = String(body?.phone ?? '').trim();
   const destination = String(body?.destination ?? '').trim();
   const serviceType = (String(body?.serviceType ?? 'depot') === 'door_to_door') ? 'door_to_door' : 'depot';
+  const initialChargePence = Math.max(0, Math.trunc(Number(body?.initial_charge_pence ?? 0)));
+const depositPaidPence = Math.max(0, Math.trunc(Number(body?.deposit_paid_pence ?? 0)));
+
 
   if (customerName.length < 2) return NextResponse.json({ error: 'Customer name too short' }, { status: 400 });
   if (phone.length < 6) return NextResponse.json({ error: 'Phone is required' }, { status: 400 });
@@ -90,6 +93,42 @@ export async function POST(req: Request) {
 
   // Refresh shipments page cache (server-rendered wrapper)
   revalidatePath('/shipments');
+
+
+// 2b) Optional: create initial ledger rows (best-effort)
+const ledgerRows: any[] = [];
+
+if (Number.isFinite(initialChargePence) && initialChargePence > 0) {
+  ledgerRows.push({
+    org_id: orgId,
+    shipment_id: shipment.id,
+    entry_type: 'charge',
+    amount_pence: initialChargePence, // +ve
+    currency: 'GBP',
+    method: 'cash',
+    note: 'Initial charge',
+    created_by: user.id,
+  });
+}
+
+if (Number.isFinite(depositPaidPence) && depositPaidPence > 0) {
+  ledgerRows.push({
+    org_id: orgId,
+    shipment_id: shipment.id,
+    entry_type: 'payment',
+    amount_pence: -depositPaidPence, // -ve
+    currency: 'GBP',
+    method: 'cash',
+    note: 'Deposit paid',
+    created_by: user.id,
+  });
+}
+
+if (ledgerRows.length) {
+  const { error: ledErr } = await supabase.from('shipment_ledger').insert(ledgerRows);
+  if (ledErr) console.warn('[shipments/create] ledger insert failed', ledErr.message);
+}
+
 
   return NextResponse.json({ ok: true, shipmentId: shipment.id, trackingCode: shipment.tracking_code });
 }

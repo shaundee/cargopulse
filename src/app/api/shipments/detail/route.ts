@@ -15,6 +15,7 @@ export async function GET(req: Request) {
     .from('shipments')
     .select(`
   id, org_id, tracking_code, destination, current_status, service_type, last_event_at,
+  public_tracking_token,
   customers(name, phone),
   pod:pod(shipment_id, receiver_name, photo_url, delivered_at)
 `)

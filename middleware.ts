@@ -12,12 +12,11 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
- setAll(cookiesToSet) {
-  cookiesToSet.forEach(({ name, value, options }) => {
-    response.cookies.set(name, value, options);
-  });
-},
-
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            response.cookies.set(name, value, options);
+          });
+        },
       },
     }
   );
@@ -25,15 +24,18 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
- const pathname = request.nextUrl.pathname
+
+  const pathname = request.nextUrl.pathname;
+
   const isAppRoute =
-  pathname.startsWith('/dashboard') ||
-  pathname.startsWith('/shipments') ||
-  pathname.startsWith('/customers') ||
-  pathname.startsWith('/messages') ||
-  pathname.startsWith('/pod') ||
-  pathname.startsWith('/settings');
-                  
+    pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/field') ||
+    pathname.startsWith('/shipments') ||
+    pathname.startsWith('/customers') ||
+    pathname.startsWith('/messages') ||
+    pathname.startsWith('/pod') ||
+    pathname.startsWith('/settings');
+
   if (isAppRoute && !user) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
@@ -41,15 +43,14 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-const isAuthPage =
- pathname === '/login' ||
- pathname === '/signup';
+  const isAuthPage = pathname === '/login' || pathname === '/signup';
 
-if (isAuthPage && !user) {
-  const url = request.nextUrl.clone();
-  url.pathname = '/dashboard';
-  return NextResponse.redirect(url);
-}
+  // If already signed in, don't let user sit on login/signup
+  if (isAuthPage && user) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/dashboard';
+    return NextResponse.redirect(url);
+  }
 
   return response;
 }

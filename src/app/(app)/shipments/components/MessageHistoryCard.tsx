@@ -35,6 +35,9 @@ export function MessageHistoryCard({
               <Group justify="space-between" align="flex-start">
                 <Stack gap={2} style={{ flex: 1 }}>
                   <Group gap="xs">
+                    <Badge variant="light" color={log.direction === 'inbound' ? 'grape' : 'teal'}>
+  {log.direction === 'inbound' ? 'inbound' : 'outbound'}
+</Badge>
                     <Badge variant="light">{String(log.send_status ?? 'unknown')}</Badge>
                     <Badge variant="light" color="gray">
                       {String(log.provider ?? 'provider')}
@@ -49,6 +52,12 @@ export function MessageHistoryCard({
                   <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
                     {String(log.body ?? '')}
                   </Text>
+                  {Array.isArray((log as any).media) && (log as any).media.length ? (
+  <Text size="xs" c="dimmed">
+    Attachments: {(log as any).media.length}
+  </Text>
+) : null}
+
 
                   {log.error ? (
                     <Text size="sm" c="red">
@@ -56,9 +65,12 @@ export function MessageHistoryCard({
                     </Text>
                   ) : null}
 
-                  <Text size="xs" c="dimmed">
-                    To: {String(log.to_phone ?? '-')}
-                  </Text>
+                 <Text size="xs" c="dimmed">
+  {log.direction === 'inbound'
+    ? `From: ${String(log.from_phone ?? '-')}`
+    : `To: ${String(log.to_phone ?? '-')}`}
+</Text>
+
                 </Stack>
 
                 <Text size="sm" c="dimmed">

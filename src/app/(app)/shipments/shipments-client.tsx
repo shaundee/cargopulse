@@ -1,28 +1,27 @@
 'use client';
 
-import { useMemo, useState} from 'react';
 import type { FormEvent } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-
 
 import { Badge, Button, Group, Paper, Stack, Text, TextInput } from '@mantine/core';
 import { DataTable } from 'mantine-datatable';
 import { IconPlus, IconSearch } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
-import type { NewShipmentForm, ShipmentRow, ShipmentStatus } from './shipment-types';
+import type { NewShipmentForm, ShipmentRow } from './shipment-types';
 import { formatWhen, statusBadgeColor, statusLabel } from './shipment-types';
 
 import { CreateShipmentDrawer } from './components/CreateShipmentDrawer';
 import { ShipmentDetailDrawer } from './components/ShipmentDetailDrawer';
 
-export function ShipmentsClient({ initialShipments }: { initialShipments: ShipmentRow[] }) {
-  
+export default function ShipmentsClient({ initialShipments }: { initialShipments: ShipmentRow[] }) {
   const router = useRouter();
 
   // Create shipment drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+
   const [form, _setForm] = useState<NewShipmentForm>({
     customerName: '',
     phone: '',
@@ -32,14 +31,12 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
 
   const setForm = (updater: (prev: NewShipmentForm) => NewShipmentForm) => _setForm(updater);
 
-  // Search + selection
+  // Search
   const [query, setQuery] = useState('');
-  
 
-  // Detail drawer open only (detail state moved to component)
+  // Detail drawer
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailShipmentId, setDetailShipmentId] = useState<string | null>(null);
-
 
   const records = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -55,6 +52,11 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
     });
   }, [initialShipments, query]);
 
+  function openShipmentDetail(shipmentId: string) {
+    setDetailShipmentId(shipmentId);
+    setDetailOpen(true);
+  }
+
   async function createShipment(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -63,7 +65,12 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
       const res = await fetch('/api/shipments/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          customerName: form.customerName,
+          phone: form.phone,
+          destination: form.destination,
+          serviceType: form.serviceType,
+        }),
       });
 
       const contentType = res.headers.get('content-type') || '';
@@ -97,7 +104,12 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
       });
 
       setDrawerOpen(false);
-      setForm(() => ({ customerName: '', phone: '', destination: '', serviceType: 'depot' }));
+      setForm(() => ({
+        customerName: '',
+        phone: '',
+        destination: '',
+        serviceType: 'depot',
+      }));
 
       router.refresh();
     } catch (err: any) {
@@ -110,12 +122,6 @@ export function ShipmentsClient({ initialShipments }: { initialShipments: Shipme
       setSaving(false);
     }
   }
-
-  function openShipmentDetail(shipmentId: string) {
-setDetailShipmentId(shipmentId);
-  setDetailOpen(true);
-  }
-  
 
   return (
     <Stack gap="md">
@@ -180,16 +186,15 @@ setDetailShipmentId(shipmentId);
         onSubmit={createShipment}
       />
 
-     <ShipmentDetailDrawer
-  opened={detailOpen}
-  shipmentId={detailShipmentId}
-  onClose={() => {
-    setDetailOpen(false);
-    setDetailShipmentId(null);
-  }}
-  onReloadRequested={() => router.refresh()}
-/>
-
+      <ShipmentDetailDrawer
+        opened={detailOpen}
+        shipmentId={detailShipmentId}
+        onClose={() => {
+          setDetailOpen(false);
+          setDetailShipmentId(null);
+        }}
+        onReloadRequested={() => router.refresh()}
+      />
     </Stack>
   );
 }

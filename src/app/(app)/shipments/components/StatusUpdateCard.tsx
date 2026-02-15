@@ -41,12 +41,12 @@ export function StatusUpdateCard({
         <Select
           label="Status"
           data={[
+            { value: 'collected', label: statusLabel('collected') },
             { value: 'received', label: statusLabel('received') },
             { value: 'loaded', label: statusLabel('loaded') },
             { value: 'departed_uk', label: statusLabel('departed_uk') },
             { value: 'arrived_jamaica', label: statusLabel('arrived_jamaica') },
             { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
-            { value: 'delivered', label: statusLabel('delivered') },
           ]}
           value={eventStatus}
           onChange={(v) => setEventStatus((v ?? 'received') as ShipmentStatus)}

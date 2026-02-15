@@ -8,6 +8,7 @@ import { useState, useEffect } from 'react';
 import type { ShipmentDetail, ShipmentEventRow, TemplateRow, MessageLogRow, ShipmentStatus } from '../shipment-types';
 import { getExistingPod } from '../shipment-types';
 
+
 import { ShipmentSummaryCard } from './ShipmentSummaryCard';
 import { StatusUpdateCard } from './StatusUpdateCard';
 import { SendUpdateCard } from './SendUpdateCard';
@@ -141,11 +142,12 @@ export function ShipmentDetailDrawer({
       const res = await fetch('/api/shipments/events/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          shipmentId: detailShipment.id,
-          status: eventStatus,
-          note: eventNote || null,
-        }),
+  body: JSON.stringify({
+  shipmentId: detailShipment.id,
+  status: eventStatus,
+  note: eventNote || null,
+  autoLog,
+}),
       });
 
       const ct = res.headers.get('content-type') || '';
@@ -158,16 +160,7 @@ export function ShipmentDetailDrawer({
 
       notifications.show({ title: 'Status updated', message: 'Timeline updated', color: 'green' });
 
-      if (autoLog) {
-        const match = templates.find((t) => t.enabled && t.status === eventStatus);
-        if (match?.id) {
-          await fetch('/api/messages/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ shipmentId: detailShipment.id, templateId: match.id }),
-          });
-        }
-      }
+   
 
       onReloadRequested();
       await openShipmentDetail(detailShipment.id);
@@ -237,16 +230,7 @@ export function ShipmentDetailDrawer({
       onReloadRequested();
 
       // auto-log delivered template if present (your existing behavior)
-      try {
-        const deliveredTpl = templates.find((t) => t.enabled && t.status === 'delivered');
-        if (deliveredTpl?.id) {
-          await fetch('/api/messages/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ shipmentId: detailShipment.id, templateId: deliveredTpl.id }),
-          });
-        }
-      } catch {}
+    
     } catch (e: any) {
       notifications.show({ title: 'POD failed', message: e?.message ?? 'Failed', color: 'red' });
     } finally {
@@ -280,31 +264,24 @@ export function ShipmentDetailDrawer({
           <>
             <ShipmentSummaryCard detailShipment={detailShipment} />
 
-            <StatusUpdateCard
+ 
+
+<SendUpdateCard
+  disabled={detailShipment.current_status === 'delivered'}
+  shipmentId={detailShipment.id}
   currentStatus={detailShipment.current_status}
-  eventStatus={eventStatus}
-  setEventStatus={setEventStatus}
-  eventNote={eventNote}
-  setEventNote={setEventNote}
-  autoLog={autoLog}
-  setAutoLog={setAutoLog}
-  onSave={addEvent}
-  saving={eventSaving}
-/>
-
-
-          <SendUpdateCard
   templates={templates}
-  sendTemplateId={sendTemplateId}
-  setSendTemplateId={setSendTemplateId}
-  onSend={sendUpdate}
-  sending={sending}
-  currentStatus={detailShipment.current_status}
+  customerName={detailShipment.customers?.name ?? ''}
+  customerPhone={detailShipment.customers?.phone ?? ''}
+  trackingCode={detailShipment.tracking_code}
+  destination={detailShipment.destination ?? ''}
+ onSent={() => void openShipmentDetail(detailShipment.id)}
+
 />
 
-            <MessageHistoryCard detailLogs={detailLogs} detailLogsLoading={detailLogsLoading} />
 
-            <PodCard
+        
+   <PodCard
               existingPod={existingPod}
               podReceiver={podReceiver}
               setPodReceiver={setPodReceiver}
@@ -313,6 +290,9 @@ export function ShipmentDetailDrawer({
               podSaving={podSaving}
               onSavePod={savePod}
             />
+            <MessageHistoryCard detailLogs={detailLogs} detailLogsLoading={detailLogsLoading} />
+
+         
 
             <TimelineCard detailEvents={detailEvents} />
           </>

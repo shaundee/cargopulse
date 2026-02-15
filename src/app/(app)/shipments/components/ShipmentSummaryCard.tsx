@@ -1,10 +1,14 @@
 'use client';
 
-import { Badge, Group, Paper, Stack, Text } from '@mantine/core';
+import { Badge, Group, Paper, Stack, Text, Button, CopyButton } from '@mantine/core';
 import type { ShipmentDetail, ShipmentStatus } from '../shipment-types';
 import { statusBadgeColor, statusLabel } from '../shipment-types'
+import { IconCheck, IconCopy } from '@tabler/icons-react';
 
 export function ShipmentSummaryCard({ detailShipment }: { detailShipment: ShipmentDetail }) {
+    const token = (detailShipment as any).public_tracking_token as string | undefined;
+  const link = token ? `${window.location.origin}/t/${token}` : '';
+
   return (
     <Paper withBorder p="sm" radius="md">
       <Stack gap={4}>
@@ -21,6 +25,20 @@ export function ShipmentSummaryCard({ detailShipment }: { detailShipment: Shipme
           <Text size="sm" c="dimmed">
             Status:
           </Text>
+                  <CopyButton value={link} timeout={2000}>
+          {({ copied, copy }) => (
+            <Button
+              size="xs"
+              variant="light"
+              onClick={copy}
+              disabled={!link}
+              leftSection={copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+            >
+              {copied ? 'Copied' : 'Copy customer link'}
+            </Button>
+          )}
+        </CopyButton>
+
           <Badge color={statusBadgeColor(detailShipment.current_status as ShipmentStatus)} variant="light">
             {statusLabel(detailShipment.current_status as ShipmentStatus)}
           </Badge>

@@ -16,7 +16,7 @@ export async function GET(req: Request) {
 
   const { data, error } = await supabase
     .from('message_logs')
-    .select('id, created_at, to_phone, provider, send_status, error, status, body, template_id')
+    .select('id, created_at, direction, from_phone, to_phone, provider, send_status, error, status, body, template_id, media')
     .eq('shipment_id', shipmentId)
     .order('created_at', { ascending: false })
     .limit(20);

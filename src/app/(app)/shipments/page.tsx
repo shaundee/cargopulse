@@ -1,6 +1,6 @@
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import  {ShipmentsClient}  from './shipments-client';
+import ShipmentsClient from './shipments-client';
 
 export default async function ShipmentsPage() {
   const supabase = await createSupabaseServerClient();
@@ -12,13 +12,14 @@ export default async function ShipmentsPage() {
   if (!user) redirect('/login');
 
   // Get org_id
-  const { data: membership } = await supabase
+  const { data: membership, error: memErr } = await supabase
     .from('org_members')
     .select('org_id')
     .eq('user_id', user.id)
     .limit(1)
     .maybeSingle();
 
+  if (memErr) throw memErr;
   if (!membership?.org_id) redirect('/onboarding');
 
   // Load shipments + customer info

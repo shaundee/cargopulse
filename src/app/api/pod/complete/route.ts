@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
 
 function renderTemplate(body: string, vars: Record<string, string>) {
   return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
@@ -103,75 +104,108 @@ export async function POST(req: Request) {
 
     if (sErr) return NextResponse.json({ error: sErr.message }, { status: 400 });
 
-// Best-effort auto-log delivered message ONCE
-try {
-  const { data: tpl, error: tplErr } = await supabase
-    .from('message_templates')
-    .select('id, body, enabled')
-    .eq('org_id', orgId)
-    .eq('status', 'delivered')
-    .eq('enabled', true)
-    .limit(1)
-    .maybeSingle();
-
-  if (tplErr) {
-    console.warn('[pod/complete] template lookup failed', tplErr.message);
-  } else if (!tpl?.id) {
-    console.warn('[pod/complete] no enabled delivered template found for org', orgId);
-  } else {
-    // customer phone is required (DB constraint)
-    let customerName = '';
-    let customerPhone: string | null = null;
-
-    if (shipment.customer_id) {
-      const { data: cust, error: custErr } = await supabase
-        .from('customers')
-        .select('name, phone')
-        .eq('id', shipment.customer_id)
+    // Best-effort auto-log delivered message ONCE
+    try {
+      const { data: tpl, error: tplErr } = await supabase
+        .from('message_templates')
+        .select('id, body, enabled')
+        .eq('org_id', orgId)
+        .eq('status', 'delivered')
+        .eq('enabled', true)
+        .limit(1)
         .maybeSingle();
 
-      if (custErr) console.warn('[pod/complete] customer lookup failed', custErr.message);
+      if (tplErr) {
+        console.warn('[pod/complete] template lookup failed', tplErr.message);
+      } else if (!tpl?.id) {
+        console.warn('[pod/complete] no enabled delivered template found for org', orgId);
+      } else {
+        // customer phone is required (DB constraint)
+        let customerName = '';
+        let customerPhone: string | null = null;
 
-      customerName = cust?.name ?? '';
-      customerPhone = (cust?.phone ?? '').trim() || null;
-    }
+        if (shipment.customer_id) {
+          const { data: cust, error: custErr } = await supabase
+            .from('customers')
+            .select('name, phone')
+            .eq('id', shipment.customer_id)
+            .maybeSingle();
 
-    if (!customerPhone) {
-      console.warn('[pod/complete] skipping auto-log: customer phone missing', { shipmentId });
-    } else {
-      const rendered = renderTemplate(String(tpl.body ?? ''), {
-        customer_name: customerName,
-        tracking_code: shipment.tracking_code ?? '',
-        destination: shipment.destination ?? '',
-        status: 'delivered',
-        // backwards compat
-        name: customerName,
-        code: shipment.tracking_code ?? '',
-      });
+          if (custErr) console.warn('[pod/complete] customer lookup failed', custErr.message);
 
-      const { error: insErr } = await supabase.from('message_logs').insert({
-        org_id: orgId,
-        shipment_id: shipmentId,
-        template_id: tpl.id,
-        to_phone: customerPhone,
-        provider: 'log',
-        send_status: 'logged',
-        body: rendered,
-        status: 'delivered',
-        sent_at: new Date().toISOString(),
-        error: null,
-      });
+          customerName = cust?.name ?? '';
+          customerPhone = (cust?.phone ?? '').trim() || null;
+        }
 
-      // 23505 = unique violation -> already logged -> ignore
-      if (insErr && (insErr as any).code !== '23505') {
-        console.warn('[pod/complete] auto-log insert failed', insErr);
+        if (!customerPhone) {
+          console.warn('[pod/complete] skipping auto-log: customer phone missing', { shipmentId });
+        } else {
+          const rendered = renderTemplate(String(tpl.body ?? ''), {
+            customer_name: customerName,
+            tracking_code: shipment.tracking_code ?? '',
+            destination: shipment.destination ?? '',
+            status: 'delivered',
+            // backwards compat
+            name: customerName,
+            code: shipment.tracking_code ?? '',
+          });
+
+          const toE164 = normalizeE164Phone(customerPhone);
+          const shouldSend = isTwilioConfigured() && Boolean(toE164);
+
+          const provider = shouldSend ? 'twilio_whatsapp' : 'log';
+          const initialSendStatus = shouldSend ? 'queued' : 'logged';
+
+          const { data: logRow, error: insErr } = await supabase
+            .from('message_logs')
+            .insert({
+              org_id: orgId,
+              shipment_id: shipmentId,
+              template_id: tpl.id,
+              to_phone: customerPhone,
+              provider,
+              send_status: initialSendStatus,
+              body: rendered,
+              status: 'delivered',
+              sent_at: new Date().toISOString(),
+              error: null,
+            })
+            .select('id')
+            .single();
+
+          // 23505 = already logged -> ignore & DO NOT send again
+          if (insErr && (insErr as any).code !== '23505') {
+            console.warn('[pod/complete] auto-log insert failed', insErr);
+          }
+
+          if (!insErr && shouldSend && logRow?.id) {
+            try {
+              const r = await twilioSendWhatsApp({ toE164: toE164!, body: rendered });
+
+              await supabase
+                .from('message_logs')
+                .update({
+                  provider_message_id: r.sid,
+                  send_status: r.status,
+                  error: null,
+                  sent_at: new Date().toISOString(),
+                })
+                .eq('id', logRow.id);
+            } catch (e: any) {
+              await supabase
+                .from('message_logs')
+                .update({
+                  send_status: 'failed',
+                  error: e?.message ?? 'Send failed',
+                })
+                .eq('id', logRow.id);
+            }
+          }
+        }
       }
+    } catch (e: any) {
+      console.warn('[pod/complete] auto-log unexpected error', e?.message ?? e);
     }
-  }
-} catch (e: any) {
-  console.error('[pod/complete] auto-log crashed', e?.message ?? e);
-}
-
   }
 
   return NextResponse.json({ ok: true, path });

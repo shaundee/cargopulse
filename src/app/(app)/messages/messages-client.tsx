@@ -7,6 +7,7 @@ import { notifications } from '@mantine/notifications';
 
 type ShipmentStatus =
   | 'received'
+  | 'collected'
   | 'loaded'
   | 'departed_uk'
   | 'arrived_jamaica'
@@ -24,9 +25,10 @@ type TemplateRow = {
 
 const STATUS_OPTIONS = [
   { value: 'received', label: 'Received' },
+  { value: 'collected', label: 'Collected' },
   { value: 'loaded', label: 'Loaded' },
   { value: 'departed_uk', label: 'Departed UK' },
-  { value: 'arrived_jamaica', label: 'Arrived Jamaica' },
+ { value: 'arrived_jamaica', label: 'Arrived at destination' },
   { value: 'out_for_delivery', label: 'Out for delivery' },
   { value: 'delivered', label: 'Delivered' },
 ] as const;
@@ -38,6 +40,7 @@ export function MessagesClient() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<TemplateRow | null>(null);
+const [paymentTpl, setPaymentTpl] = useState<{ id?: string; body: string; enabled: boolean } | null>(null);
 
   const [form, setForm] = useState({
     status: 'received' as ShipmentStatus,
@@ -52,6 +55,13 @@ export function MessagesClient() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? 'Failed to load templates');
       setTemplates(data.templates ?? []);
+      const miscRes = await fetch('/api/message-templates-misc?key=payment_reminder');
+const miscJson = await miscRes.json();
+if (miscRes.ok) {
+  const row = miscJson?.templates?.[0];
+  if (row) setPaymentTpl({ id: row.id, body: row.body ?? '', enabled: !!row.enabled });
+}
+
     } catch (e: any) {
       notifications.show({ title: 'Load failed', message: e?.message ?? 'Error', color: 'red' });
     } finally {
@@ -84,6 +94,25 @@ export function MessagesClient() {
     setForm({ status: t.status, body: t.body, enabled: t.enabled });
     setDrawerOpen(true);
   }
+async function savePaymentTemplate() {
+  if (!paymentTpl) return;
+
+  const res = await fetch('/api/message-templates-misc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: paymentTpl.id,
+      key: 'payment_reminder',
+      body: paymentTpl.body,
+      enabled: paymentTpl.enabled,
+    }),
+  });
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error ?? 'Save failed');
+
+  notifications.show({ title: 'Saved', message: 'Payment reminder template updated', color: 'green' });
+}
 
   async function saveTemplate() {
     try {
@@ -130,6 +159,38 @@ export function MessagesClient() {
             w={360}
           />
         </Group>
+<Paper p="md" withBorder radius="md">
+  <Stack gap="sm">
+    <Text fw={700}>Payment reminder template</Text>
+    <Text size="sm" c="dimmed">
+      Used by the “Send payment reminder” button on a shipment.
+    </Text>
+
+    <Textarea
+      label="Body"
+      minRows={4}
+      value={paymentTpl?.body ?? ''}
+      onChange={(e) => setPaymentTpl((p) => ({ ...(p ?? { body: '', enabled: true }), body: e.currentTarget.value }))}
+      placeholder="Hi {{name}}, your balance for shipment {{code}} is {{balance}}…"
+    />
+
+    <Switch
+      checked={paymentTpl?.enabled ?? true}
+      onChange={(e) => setPaymentTpl((p) => ({ ...(p ?? { body: '', enabled: true }), enabled: e.currentTarget.checked }))}
+      label="Enabled"
+    />
+
+    <Group justify="flex-end">
+      <Button variant="light" onClick={savePaymentTemplate} disabled={!paymentTpl}>
+        Save payment template
+      </Button>
+    </Group>
+
+    <Text size="sm" c="dimmed">
+      Variables: {'{{name}}'} {'{{code}}'} {'{{balance}}'} {'{{charged}}'} {'{{paid}}'}
+    </Text>
+  </Stack>
+</Paper>
 
         <DataTable
           records={filtered}

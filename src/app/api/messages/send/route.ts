@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
 
 function renderTemplate(body: string, vars: Record<string, string>) {
   return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
@@ -53,7 +54,8 @@ const rendered = renderTemplate(String(tpl.body ?? ''), {
   customer_name: customerName,
   tracking_code: shipment.tracking_code ?? '',
   destination: shipment.destination ?? '',
-  status: shipment.current_status ?? '',
+status: tpl.status ?? null,
+
 
   // backwards-compat / seeded templates
   name: customerName,
@@ -62,27 +64,63 @@ const rendered = renderTemplate(String(tpl.body ?? ''), {
 
 
   // For now: LOG ONLY (no WhatsApp provider yet)
- const { data: log, error: logErr } = await supabase
-  .from('message_logs')
-  .insert({
-    org_id: shipment.org_id,
-    shipment_id: shipment.id,
-    template_id: tpl.id,
-    to_phone: customerPhone,
-    provider: 'log',
-    send_status: 'logged',      // we are not actually sending yet
-    body: rendered,
-    status: shipment.current_status ?? null,
-    sent_at: new Date().toISOString(),
-  })
-  .select('id')
-  .single();
+  const toE164 = normalizeE164Phone(customerPhone);
 
+  // Always log; send only if Twilio configured + phone is valid
+  const shouldSend = isTwilioConfigured() && Boolean(toE164);
+
+  const provider = shouldSend ? 'twilio_whatsapp' : 'log';
+  const initialSendStatus = shouldSend ? 'queued' : 'logged';
+
+  const { data: log, error: logErr } = await supabase
+    .from('message_logs')
+    .insert({
+      org_id: shipment.org_id,
+      shipment_id: shipment.id,
+      template_id: tpl.id,
+      to_phone: customerPhone,
+      provider,
+      send_status: initialSendStatus,
+      body: rendered,
+      status: tpl.status ?? null, // <-- template status (not shipment status)
+      sent_at: new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+
+   // Delivered dedupe: treat 23505 as a safe "already done" and DO NOT send.
+  if (logErr && (logErr as any).code === '23505') {
+    return NextResponse.json({ ok: true, skipped: true, reason: 'duplicate_delivered' });
+  }
   if (logErr) return NextResponse.json({ error: logErr.message }, { status: 400 });
 
-  return NextResponse.json({
-    ok: true,
-    rendered,
-    log_id: log.id,
-  });
+  if (!shouldSend) {
+    return NextResponse.json({ ok: true, rendered, log_id: log.id, mode: 'logged_only', phone_ok: Boolean(toE164) });
+  }
+
+  try {
+    const result = await twilioSendWhatsApp({ toE164: toE164!, body: rendered });
+
+    await supabase
+      .from('message_logs')
+      .update({
+        provider_message_id: result.sid,
+        send_status: result.status,
+        error: null,
+        sent_at: new Date().toISOString(),
+      })
+      .eq('id', log.id);
+
+    return NextResponse.json({ ok: true, rendered, log_id: log.id, mode: 'sent', sid: result.sid, status: result.status });
+  } catch (e: any) {
+    await supabase
+      .from('message_logs')
+      .update({
+        send_status: 'failed',
+        error: e?.message ?? 'Send failed',
+      })
+      .eq('id', log.id);
+
+    return NextResponse.json({ ok: false, error: e?.message ?? 'Send failed', log_id: log.id }, { status: 400 });
+  }
 }

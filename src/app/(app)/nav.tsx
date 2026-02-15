@@ -9,11 +9,13 @@ import {
   IconUsers,
   IconMessage,
   IconPhoto,
+  IconTruckDelivery,
   IconSettings,
 } from '@tabler/icons-react';
 
 const items = [
   { href: '/dashboard', label: 'Dashboard', icon: IconLayoutDashboard },
+  { href: '/field', label: 'Field (Collections)', icon: IconTruckDelivery },
   { href: '/shipments', label: 'Shipments', icon: IconPackage },
   { href: '/customers', label: 'Customers', icon: IconUsers },
   { href: '/messages', label: 'Messages', icon: IconMessage },
