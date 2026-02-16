@@ -1,20 +1,17 @@
 'use client';
 
-import { Drawer, Paper, Stack, Text } from '@mantine/core';
+import { Drawer, Paper, Stack, Text, Image, SimpleGrid, Title } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
-
 import type { ShipmentDetail, ShipmentEventRow, TemplateRow, MessageLogRow, ShipmentStatus } from '../shipment-types';
 import { getExistingPod } from '../shipment-types';
-
-
 import { ShipmentSummaryCard } from './ShipmentSummaryCard';
-import { StatusUpdateCard } from './StatusUpdateCard';
 import { SendUpdateCard } from './SendUpdateCard';
 import { MessageHistoryCard } from './MessageHistoryCard';
 import { PodCard } from './PodCard';
 import { TimelineCard } from './TimelineCard';
+import { StatusUpdateCard } from './StatusUpdateCard';
 
 export function ShipmentDetailDrawer({
   opened,
@@ -31,6 +28,8 @@ export function ShipmentDetailDrawer({
      useEffect(() => {
   if (!opened) return;
   if (!shipmentId) return;
+
+
   void openShipmentDetail(shipmentId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [opened, shipmentId]);
@@ -56,6 +55,8 @@ export function ShipmentDetailDrawer({
   const [podSaving, setPodSaving] = useState(false);
 
   const existingPod = getExistingPod(detailShipment);
+  const [assets, setAssets] = useState<Array<{ id: string; kind: string; url: string | null; created_at: string }>>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
 
   async function loadTemplatesAndSelect(currentStatus: ShipmentStatus) {
     try {
@@ -75,6 +76,21 @@ export function ShipmentDetailDrawer({
       // ignore
     }
   }
+  
+async function loadAssets(shipmentId: string) {
+  setAssetsLoading(true);
+  try {
+    const res = await fetch(`/api/shipments/assets/list?shipmentId=${encodeURIComponent(shipmentId)}`, { cache: 'no-store' });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error ?? 'Failed to load assets');
+    setAssets(json.assets ?? []);
+  } catch {
+    setAssets([]);
+  } finally {
+    setAssetsLoading(false);
+  }
+}
+
 
   async function loadLogs(shipmentId: string) {
     setDetailLogsLoading(true);
@@ -98,12 +114,10 @@ export function ShipmentDetailDrawer({
     setDetailShipment(null);
     setDetailEvents([]);
     setDetailLogs([]);
-    
- 
-
     // reset send UI
     setTemplates([]);
     setSendTemplateId(null);
+await loadAssets(shipmentId);
 
     try {
       const res = await fetch(`/api/shipments/detail?shipment_id=${encodeURIComponent(shipmentId)}`);
@@ -264,6 +278,19 @@ export function ShipmentDetailDrawer({
           <>
             <ShipmentSummaryCard detailShipment={detailShipment} />
 
+            <StatusUpdateCard
+  currentStatus={detailShipment.current_status as ShipmentStatus}
+  eventStatus={eventStatus}
+  setEventStatus={setEventStatus}
+  eventNote={eventNote}
+  setEventNote={setEventNote}
+  autoLog={autoLog}
+  setAutoLog={setAutoLog}
+  onSave={addEvent}
+  saving={eventSaving}
+/>
+
+
  
 
 <SendUpdateCard
@@ -291,10 +318,34 @@ export function ShipmentDetailDrawer({
               onSavePod={savePod}
             />
             <MessageHistoryCard detailLogs={detailLogs} detailLogsLoading={detailLogsLoading} />
+            <TimelineCard detailEvents={detailEvents} trackingCode={detailShipment.tracking_code} />
+            <Paper withBorder p="md">
+  <Title order={5}>Pickup photos</Title>
 
-         
+  {assetsLoading ? (
+    <Text c="dimmed" size="sm">Loading…</Text>
+  ) : (
+    <>
+      <SimpleGrid cols={3} mt="sm">
+        {assets
+          .filter((a) => a.kind === 'pickup_photo' && a.url)
+          .map((a) => <Image key={a.id} src={a.url!} radius="md" />)}
+      </SimpleGrid>
 
-            <TimelineCard detailEvents={detailEvents} />
+      {assets.some((a) => a.kind === 'pickup_signature' && a.url) && (
+        <>
+          <Title order={6} mt="md">Signature</Title>
+          {assets
+            .filter((a) => a.kind === 'pickup_signature' && a.url)
+            .map((a) => <Image key={a.id} src={a.url!} radius="md" />)}
+        </>
+      )}
+
+      {!assets.length && <Text c="dimmed" size="sm" mt="sm">No pickup assets yet.</Text>}
+    </>
+  )}
+</Paper>
+
           </>
         )}
       </Stack>

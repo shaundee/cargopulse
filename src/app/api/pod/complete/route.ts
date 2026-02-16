@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
+import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
 
 function renderTemplate(body: string, vars: Record<string, string>) {
   return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
@@ -44,7 +45,7 @@ export async function POST(req: Request) {
   // Shipment must exist + belong to org
   const { data: shipment, error: shipErr } = await supabase
     .from('shipments')
-    .select('id, org_id, customer_id, tracking_code, destination, current_status')
+    .select('id, org_id, customer_id, tracking_code, destination, current_status, public_tracking_token')
     .eq('id', shipmentId)
     .maybeSingle();
 
@@ -140,16 +141,23 @@ export async function POST(req: Request) {
         if (!customerPhone) {
           console.warn('[pod/complete] skipping auto-log: customer phone missing', { shipmentId });
         } else {
-          const rendered = renderTemplate(String(tpl.body ?? ''), {
-            customer_name: customerName,
-            tracking_code: shipment.tracking_code ?? '',
-            destination: shipment.destination ?? '',
-            status: 'delivered',
-            // backwards compat
-            name: customerName,
-            code: shipment.tracking_code ?? '',
-          });
 
+          const baseUrl = getBaseUrlFromHeaders(req.headers);
+const trackingUrl =
+  shipment.public_tracking_token && baseUrl
+    ? `${baseUrl}/t/${shipment.public_tracking_token}`
+    : '';
+
+const rendered = renderTemplate(String(tpl.body ?? ''), {
+  customer_name: customerName,
+  tracking_code: shipment.tracking_code ?? '',
+  destination: shipment.destination ?? '',
+  status: 'delivered',
+  tracking_url: trackingUrl,
+
+  name: customerName,
+  code: shipment.tracking_code ?? '',
+});
           const toE164 = normalizeE164Phone(customerPhone);
           const shouldSend = isTwilioConfigured() && Boolean(toE164);
 

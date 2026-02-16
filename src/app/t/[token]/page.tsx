@@ -1,54 +1,68 @@
 import { notFound } from 'next/navigation';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { PublicTrackingClient } from './public-tracking-client';
+import { createClient } from '@supabase/supabase-js';
+import { Badge, Container, Paper, Stack, Text, Timeline, Title } from '@mantine/core';
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function niceStatus(s: string) {
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
-export default async function TrackingPage({ params }: { params: { token: string } }) {
-  const token = String(params.token ?? '').trim();
-  if (!UUID_RE.test(token)) notFound();
+export default async function TrackingPage({ params }: { params: { code: string } }) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  const supabase = createSupabaseAdminClient();
+  if (!url || !anon) throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
 
-  const { data: shipment, error: shipErr } = await supabase
-    .from('shipments')
-    .select(`
-      id, org_id, tracking_code, destination, service_type, current_status, last_event_at,
-      org:organizations(name, support_phone),
-      customer:customers(name)
-    `)
-    .eq('public_tracking_token', token)
-    .maybeSingle();
+  const supabase = createClient(url, anon);
 
-  if (shipErr || !shipment) notFound();
+  const { data, error } = await supabase.rpc('public_get_tracking', { p_code: params.code });
 
-  const { data: events } = await supabase
-    .from('shipment_events')
-    .select('status, note, occurred_at')
-    .eq('shipment_id', shipment.id)
-    .order('occurred_at', { ascending: true })
-    .limit(200);
+  if (error || !data) return notFound();
 
-  const { data: pod } = await supabase
-    .from('pod')
-    .select('receiver_name, delivered_at, photo_url')
-    .eq('shipment_id', shipment.id)
-    .maybeSingle();
-
-  let podSignedUrl: string | null = null;
-  if (pod?.photo_url) {
-    const { data: signed } = await supabase.storage.from('pod').createSignedUrl(pod.photo_url, 300);
-    podSignedUrl = signed?.signedUrl ?? null;
-  }
+  const shipment = data.shipment;
+  const events: Array<{ status: string; occurred_at: string }> = data.events ?? [];
 
   return (
-    <PublicTrackingClient
-      data={{
-        shipment,
-        events: events ?? [],
-        pod: pod ? { ...pod, signed_url: podSignedUrl } : null,
-      }}
-    />
+    <Container size={520} py={40}>
+      <Stack gap="md">
+        <Stack gap={4}>
+          <Title order={2}>Tracking</Title>
+          <Text c="dimmed" size="sm">Code: {shipment.tracking_code}</Text>
+        </Stack>
+
+        <Paper withBorder p="lg" radius="md">
+          <Stack gap="md">
+            <Stack gap={6}>
+              <Text fw={700}>Current status</Text>
+              <Badge size="lg">{niceStatus(shipment.status)}</Badge>
+            </Stack>
+
+            <Stack gap={6}>
+              <Text fw={700}>Timeline</Text>
+
+              {events.length === 0 ? (
+                <Text c="dimmed" size="sm">No updates yet.</Text>
+              ) : (
+                <Timeline bulletSize={22} lineWidth={2}>
+                  {events.map((e, i) => (
+                    <Timeline.Item key={i} title={niceStatus(e.status)}>
+                      <Text size="sm" c="dimmed">
+                        {new Intl.DateTimeFormat('en-GB', {
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        }).format(new Date(e.occurred_at))}
+                      </Text>
+                    </Timeline.Item>
+                  ))}
+                </Timeline>
+              )}
+            </Stack>
+          </Stack>
+        </Paper>
+
+        <Text c="dimmed" size="xs">
+          Updates are provided by the shipping operator.
+        </Text>
+      </Stack>
+    </Container>
   );
 }

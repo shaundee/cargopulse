@@ -6,6 +6,7 @@ export type ShipmentStatus =
   | 'loaded'
   | 'departed_uk'
   | 'arrived_jamaica'
+  | 'collected_by_customer'
   | 'out_for_delivery'
   | 'delivered';
 
@@ -16,12 +17,10 @@ export type ShipmentRow = {
   current_status: ShipmentStatus;
   last_event_at: string;
   customers: { name: string; phone: string } | null;
+    service_type?: 'depot' | 'door_to_door' | string | null;
+  created_at?: string | null;
 
-  // rollups (from supabase/migrations/20260207124716_shipments_financial_rollups.sql)
-  balance_pence?: number | null;
-  total_charged_pence?: number | null;
-  total_paid_pence?: number | null;
-};
+}
 
 export type NewShipmentForm = {
   customerName: string;
@@ -97,6 +96,8 @@ export function statusLabel(s: ShipmentStatus) {
       return 'Departed UK';
     case 'arrived_jamaica':
       return 'Arrived at destination';
+      case 'collected_by_customer':
+      return 'Collected by customer';
     case 'out_for_delivery':
       return 'Out for delivery';
     case 'delivered':
@@ -112,6 +113,8 @@ export function statusBadgeColor(status: ShipmentStatus): MantineColor {
       return 'teal';
     case 'arrived_jamaica':
       return 'cyan';
+       case 'collected_by_customer':
+      return 'green';
     case 'departed_uk':
       return 'blue';
     case 'loaded':

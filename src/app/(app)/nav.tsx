@@ -15,6 +15,7 @@ import {
 
 const items = [
   { href: '/dashboard', label: 'Dashboard', icon: IconLayoutDashboard },
+  { href: '/agent', label: 'Agent', icon: IconPackage },
   { href: '/field', label: 'Field (Collections)', icon: IconTruckDelivery },
   { href: '/shipments', label: 'Shipments', icon: IconPackage },
   { href: '/customers', label: 'Customers', icon: IconUsers },

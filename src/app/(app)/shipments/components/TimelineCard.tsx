@@ -1,15 +1,49 @@
 'use client';
 
-import { Group, Paper, Stack, Text } from '@mantine/core';
+import { Group, Paper, Stack, Text, Button } from '@mantine/core';
 import type { ShipmentEventRow, ShipmentStatus } from '../shipment-types';
 import { formatWhen, statusLabel } from '../shipment-types';
+import { IconDownload } from '@tabler/icons-react';
 
-export function TimelineCard({ detailEvents }: { detailEvents: ShipmentEventRow[] }) {
+export function TimelineCard({
+  detailEvents,
+  trackingCode,
+}: {
+  detailEvents: ShipmentEventRow[];
+  trackingCode?: string;
+}) {
+
   return (
     <Paper withBorder p="sm" radius="md">
-      <Text fw={700} mb="xs">
-        Timeline
-      </Text>
+   <Group justify="space-between" mb="xs">
+  <Text fw={700}>Timeline</Text>
+  <Button
+    size="xs"
+    variant="light"
+    leftSection={<IconDownload size={14} />}
+    onClick={() => {
+      const header = ['status', 'occurred_at', 'note'].join(',');
+      const lines = detailEvents.map((ev) => {
+        const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        return [esc(ev.status), esc(ev.occurred_at ?? ''), esc(ev.note ?? '')].join(',');
+      });
+      const csv = [header, ...lines].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${trackingCode ?? 'shipment'}_timeline.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }}
+  >
+    Export CSV
+  </Button>
+</Group>
+
 
       <Stack gap="xs">
         {detailEvents.length === 0 ? (

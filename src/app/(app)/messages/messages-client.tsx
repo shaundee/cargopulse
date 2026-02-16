@@ -11,6 +11,7 @@ type ShipmentStatus =
   | 'loaded'
   | 'departed_uk'
   | 'arrived_jamaica'
+  | 'collected_by_customer'
   | 'out_for_delivery'
   | 'delivered';
 
@@ -29,6 +30,7 @@ const STATUS_OPTIONS = [
   { value: 'loaded', label: 'Loaded' },
   { value: 'departed_uk', label: 'Departed UK' },
  { value: 'arrived_jamaica', label: 'Arrived at destination' },
+  { value: 'collected_by_customer', label: 'Collected by customer' },
   { value: 'out_for_delivery', label: 'Out for delivery' },
   { value: 'delivered', label: 'Delivered' },
 ] as const;

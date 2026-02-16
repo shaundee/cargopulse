@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
+import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
 
 function renderTemplate(body: string, vars: Record<string, string>) {
   return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
   // Load shipment + customer
   const { data: shipment, error: shipErr } = await supabase
     .from('shipments')
-    .select('id, org_id, tracking_code, destination, current_status, customers(name, phone)')
+    .select('id, org_id, tracking_code, destination, current_status, public_tracking_token, customers(name, phone)')
     .eq('id', shipmentId)
     .maybeSingle();
 
@@ -49,18 +50,25 @@ const { data: tpl, error: tplErr } = await supabase
 const customerName = customer?.name ?? '';
 const customerPhone = customer?.phone ?? '';
 
+const baseUrl = getBaseUrlFromHeaders(req.headers);
+const trackingUrl =
+  shipment.public_tracking_token && baseUrl
+    ? `${baseUrl}/t/${shipment.public_tracking_token}`
+    : '';
+
 const rendered = renderTemplate(String(tpl.body ?? ''), {
   // preferred keys
   customer_name: customerName,
   tracking_code: shipment.tracking_code ?? '',
   destination: shipment.destination ?? '',
-status: tpl.status ?? null,
-
+  status: String(tpl.status ?? ''),
+  tracking_url: trackingUrl,
 
   // backwards-compat / seeded templates
   name: customerName,
   code: shipment.tracking_code ?? '',
 });
+
 
 
   // For now: LOG ONLY (no WhatsApp provider yet)

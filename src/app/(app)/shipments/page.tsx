@@ -25,7 +25,9 @@ export default async function ShipmentsPage() {
   // Load shipments + customer info
   const { data: shipments, error } = await supabase
     .from('shipments')
-    .select('id, tracking_code, destination, current_status, last_event_at, customers(name, phone)')
+    .select(
+  'id, tracking_code, destination, service_type, current_status, last_event_at, created_at, customers(name, phone)'
+)
     .eq('org_id', membership.org_id)
     .order('last_event_at', { ascending: false })
     .limit(200);

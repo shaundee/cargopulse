@@ -38,6 +38,16 @@ export function ShipmentSummaryCard({ detailShipment }: { detailShipment: Shipme
             </Button>
           )}
         </CopyButton>
+        
+        <Button
+  size="xs"
+  variant="light"
+  onClick={() => window.open(`/shipments/print/${detailShipment.id}`, '_blank')}
+  leftSection={<span style={{ fontSize: 12 }}>🖨️</span>}
+>
+  Print
+</Button>
+
 
           <Badge color={statusBadgeColor(detailShipment.current_status as ShipmentStatus)} variant="light">
             {statusLabel(detailShipment.current_status as ShipmentStatus)}
