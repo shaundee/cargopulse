@@ -29,6 +29,33 @@ function parsePayload(payloadRaw: unknown) {
   }
 }
 
+function str(v: unknown) {
+  return String(v ?? '').trim();
+}
+
+function optStr(v: unknown) {
+  const s = String(v ?? '').trim();
+  return s ? s : null;
+}
+
+function num(v: unknown) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function bool(v: unknown) {
+  if (v === null || v === undefined || v === '') return null;
+  return Boolean(v);
+}
+
+function pick<T>(...vals: T[]) {
+  for (const v of vals) {
+    if (v !== undefined) return v;
+  }
+  return undefined;
+}
+
 export async function POST(req: Request) {
   const supabase = await createSupabaseServerClient();
 
@@ -41,22 +68,41 @@ export async function POST(req: Request) {
   const form = await req.formData().catch(() => null);
   if (!form) return NextResponse.json({ error: 'Invalid form data' }, { status: 400 });
 
-  const clientEventId = String(form.get('clientEventId') ?? '').trim();
-  const payload = parsePayload(form.get('payload'));
+  const clientEventId = str(form.get('clientEventId'));
+  const payload = parsePayload(form.get('payload')) as Record<string, unknown> | null;
 
   if (!clientEventId) return NextResponse.json({ error: 'clientEventId is required' }, { status: 400 });
   if (!payload) return NextResponse.json({ error: 'payload must be valid JSON' }, { status: 400 });
 
-  const customerName = String(payload?.customerName ?? '').trim();
-  const phone = String(payload?.phone ?? '').trim();
-  const destination = String(payload?.destination ?? '').trim();
-  const serviceType = String(payload?.serviceType ?? 'depot').trim();
-  const cargoType = String(payload?.cargoType ?? 'general').trim();
+  const customerName = str(payload.customerName);
+  const phone = str(payload.phone);
+  const destination = str(payload.destination);
+  const serviceType = str(payload.serviceType || 'depot') as 'depot' | 'door_to_door';
 
-  const pickupAddress = payload?.pickupAddress == null ? null : String(payload.pickupAddress).trim() || null;
-  const pickupContactPhone = payload?.pickupContactPhone == null ? null : String(payload.pickupContactPhone).trim() || null;
-  const notes = payload?.notes == null ? null : String(payload.notes).trim() || null;
-  const occurredAtISO = payload?.occurredAtISO ? String(payload.occurredAtISO) : new Date().toISOString();
+  const cargoTypeRaw = str(payload.cargoType || 'general');
+  const allowed = new Set([
+    'general',
+    'barrel',
+    'box',
+    'crate',
+    'pallet',
+    'vehicle',
+    'machinery',
+    'mixed',
+    'other',
+  ]);
+  const cargoTypeSafe = (allowed.has(cargoTypeRaw) ? cargoTypeRaw : 'general') as
+    | 'general'
+    | 'barrel'
+    | 'box'
+    | 'crate'
+    | 'pallet'
+    | 'vehicle'
+    | 'machinery'
+    | 'mixed'
+    | 'other';
+
+  const occurredAtISO = str(payload.occurredAtISO) || new Date().toISOString();
 
   if (customerName.length < 2) return NextResponse.json({ error: 'customerName is required' }, { status: 400 });
   if (phone.length < 6) return NextResponse.json({ error: 'phone is required' }, { status: 400 });
@@ -76,14 +122,12 @@ export async function POST(req: Request) {
 
   // Idempotency: if we already processed this clientEventId, return the existing result.
   // Table: public.client_sync_events (org_id, client_event_id) PK
-  const { error: evInsErr } = await supabase
-    .from('client_sync_events')
-    .insert({
-      org_id: orgId,
-      client_event_id: clientEventId,
-      kind: 'intake_create',
-      payload,
-    });
+  const { error: evInsErr } = await supabase.from('client_sync_events').insert({
+    org_id: orgId,
+    client_event_id: clientEventId,
+    kind: 'intake_create',
+    payload,
+  });
 
   if (evInsErr) {
     // 23505 = duplicate
@@ -108,6 +152,62 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: evInsErr.message }, { status: 400 });
   }
 
+  // --- cargo meta (backwards compatible with older outbox payload keys) ---
+  const quantity = num((payload as any).quantity);
+
+  const pickupAddress = optStr((payload as any).pickupAddress);
+  const pickupContactPhone = optStr((payload as any).pickupContactPhone);
+  const notes = optStr((payload as any).notes);
+
+  // old keys: machineryWeightKg etc
+  const weightKg = num(pick((payload as any).weightKg, (payload as any).machineryWeightKg));
+  const lengthCm = num(pick((payload as any).lengthCm, (payload as any).machineryLengthCm));
+  const widthCm = num(pick((payload as any).widthCm, (payload as any).machineryWidthCm));
+  const heightCm = num(pick((payload as any).heightCm, (payload as any).machineryHeightCm));
+  const forkliftRequired = bool(pick((payload as any).forkliftRequired, (payload as any).machineryForkliftRequired));
+  const handlingNotes = optStr((payload as any).handlingNotes);
+
+  // vehicle keys: old keysReceived, new vehicleKeysReceived
+  const vehicleMake = optStr((payload as any).vehicleMake);
+  const vehicleModel = optStr((payload as any).vehicleModel);
+  const vehicleYear = optStr((payload as any).vehicleYear);
+  const vehicleVin = optStr((payload as any).vehicleVin);
+  const vehicleReg = optStr((payload as any).vehicleReg);
+  const keysReceived = bool(pick((payload as any).keysReceived, (payload as any).vehicleKeysReceived));
+
+  const cargoMeta: Record<string, unknown> = {
+    pickup_address: pickupAddress,
+    pickup_contact_phone: pickupContactPhone,
+    notes,
+  };
+
+  if (cargoTypeSafe === 'barrel' || cargoTypeSafe === 'box') {
+    if (Number.isFinite(quantity as any)) cargoMeta.quantity = quantity;
+  }
+
+  if (cargoTypeSafe === 'crate' || cargoTypeSafe === 'pallet' || cargoTypeSafe === 'machinery') {
+    cargoMeta.dimensions = {
+      weight_kg: weightKg,
+      length_cm: lengthCm,
+      width_cm: widthCm,
+      height_cm: heightCm,
+      forklift_required: forkliftRequired,
+      handling_notes: handlingNotes,
+    };
+  }
+
+  if (cargoTypeSafe === 'vehicle') {
+    cargoMeta.vehicle = {
+      make: vehicleMake,
+      model: vehicleModel,
+      year: vehicleYear,
+      vin: vehicleVin,
+      reg: vehicleReg,
+      keys_received: keysReceived,
+      handling_notes: handlingNotes,
+    };
+  }
+
   // 1) Customer upsert by (org_id, phone)
   const { data: existingCustomer, error: custSelErr } = await supabase
     .from('customers')
@@ -121,10 +221,7 @@ export async function POST(req: Request) {
   let customerId = existingCustomer?.id as string | undefined;
 
   if (customerId) {
-    const { error: updErr } = await supabase
-      .from('customers')
-      .update({ name: customerName })
-      .eq('id', customerId);
+    const { error: updErr } = await supabase.from('customers').update({ name: customerName }).eq('id', customerId);
     if (updErr) return NextResponse.json({ error: updErr.message }, { status: 400 });
   } else {
     const { data: newCust, error: insErr } = await supabase
@@ -150,12 +247,8 @@ export async function POST(req: Request) {
       service_type: serviceType,
       current_status: 'collected',
       last_event_at: occurredAtISO,
-      cargo_type: cargoType,
-      cargo_meta: {
-        pickup_address: pickupAddress,
-        pickup_contact_phone: pickupContactPhone,
-        notes,
-      },
+      cargo_type: cargoTypeSafe,
+      cargo_meta: cargoMeta,
     })
     .select('id, tracking_code')
     .single();
@@ -170,19 +263,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: shipErr.message }, { status: 400 });
   }
 
-const shipmentId = shipment.id;
-const createdBy = user.id;
+  const shipmentId = shipment.id as string;
+  const createdBy = user.id;
 
   // 3) Insert initial event
-  const { error: evErr } = await supabase
-    .from('shipment_events')
-    .insert({
-      org_id: orgId,
-      shipment_id: shipment.id,
-      status: 'collected',
-      note: notes ?? 'Collected (field intake)',
-      occurred_at: occurredAtISO,
-    });
+  const { error: evErr } = await supabase.from('shipment_events').insert({
+    org_id: orgId,
+    shipment_id: shipmentId,
+    status: 'collected',
+    note: notes ?? 'Collected (field intake)',
+    occurred_at: occurredAtISO,
+  });
 
   if (evErr) return NextResponse.json({ error: evErr.message }, { status: 400 });
 
@@ -199,21 +290,16 @@ const createdBy = user.id;
     const path = `org/${orgId}/shipments/${shipmentId}/intake/${Date.now()}-${idx}.${ext}`;
     const bytes = new Uint8Array(await file.arrayBuffer());
 
-    const { error: upErr } = await supabase.storage
-      .from('assets')
-      .upload(path, bytes, { contentType, upsert: true });
-
+    const { error: upErr } = await supabase.storage.from('assets').upload(path, bytes, { contentType, upsert: true });
     if (upErr) throw new Error(upErr.message);
 
-    const { error: assetErr } = await supabase
-      .from('shipment_assets')
-      .insert({
-        org_id: orgId,
+    const { error: assetErr } = await supabase.from('shipment_assets').insert({
+      org_id: orgId,
       shipment_id: shipmentId,
-        kind,
-        path,
-        created_by: createdBy,
-      });
+      kind,
+      path,
+      created_by: createdBy,
+    });
 
     if (assetErr) throw new Error(assetErr.message);
 
@@ -233,14 +319,19 @@ const createdBy = user.id;
   } catch (e: any) {
     await supabase
       .from('client_sync_events')
-      .update({ processed_at: new Date().toISOString(), shipment_id: shipment.id, tracking_code: shipment.tracking_code, error: e?.message ?? 'asset_upload_failed' })
+      .update({
+        processed_at: new Date().toISOString(),
+        shipment_id: shipmentId,
+        tracking_code: shipment.tracking_code,
+        error: e?.message ?? 'asset_upload_failed',
+      })
       .eq('org_id', orgId)
       .eq('client_event_id', clientEventId);
 
-    return NextResponse.json({ error: e?.message ?? 'Asset upload failed', shipmentId: shipment.id }, { status: 400 });
+    return NextResponse.json({ error: e?.message ?? 'Asset upload failed', shipmentId }, { status: 400 });
   }
 
-  // 5) Best-effort auto-log/send "collected" message (optional, but helps the demo)
+  // 5) Best-effort auto-log/send "collected" message
   try {
     const { data: tpl } = await supabase
       .from('message_templates')
@@ -272,7 +363,7 @@ const createdBy = user.id;
         .from('message_logs')
         .insert({
           org_id: orgId,
-          shipment_id: shipment.id,
+          shipment_id: shipmentId,
           template_id: tpl.id,
           to_phone: phone,
           provider,
@@ -299,10 +390,7 @@ const createdBy = user.id;
             })
             .eq('id', logRow.id);
         } catch (e: any) {
-          await supabase
-            .from('message_logs')
-            .update({ send_status: 'failed', error: e?.message ?? 'Send failed' })
-            .eq('id', logRow.id);
+          await supabase.from('message_logs').update({ send_status: 'failed', error: e?.message ?? 'Send failed' }).eq('id', logRow.id);
         }
       }
     }
@@ -313,10 +401,17 @@ const createdBy = user.id;
   // Mark processed
   await supabase
     .from('client_sync_events')
-    .update({ processed_at: new Date().toISOString(), shipment_id: shipment.id, tracking_code: shipment.tracking_code, error: null })
+    .update({
+      processed_at: new Date().toISOString(),
+      shipment_id: shipmentId,
+      tracking_code: shipment.tracking_code,
+      error: null,
+    })
     .eq('org_id', orgId)
     .eq('client_event_id', clientEventId);
 
   revalidatePath('/shipments');
-  return NextResponse.json({ ok: true, shipmentId: shipment.id, trackingCode: shipment.tracking_code });
+  revalidatePath('/field');
+
+  return NextResponse.json({ ok: true, shipmentId, trackingCode: shipment.tracking_code });
 }

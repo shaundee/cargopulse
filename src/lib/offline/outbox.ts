@@ -1,3 +1,4 @@
+
 export type OutboxStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 
 export type IntakePayload = {
@@ -5,10 +6,45 @@ export type IntakePayload = {
   phone: string;
   destination: string;
   serviceType: 'depot' | 'door_to_door';
-  cargoType: 'general' | 'barrel' | 'box' | 'vehicle' | 'machinery' | 'mixed' | 'other';
+  cargoType:
+    | 'general'
+    | 'barrel'
+    | 'box'
+    | 'crate'
+    | 'pallet'
+    | 'vehicle'
+    | 'machinery'
+    | 'mixed'
+    | 'other';
+
+  // shared optional meta
   pickupAddress?: string | null;
   pickupContactPhone?: string | null;
   notes?: string | null;
+
+  // barrel / box
+  quantity?: number | null;
+
+  // crate / pallet / machinery
+  weightKg?: number | null;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
+  forkliftRequired?: boolean | null;
+  handlingNotes?: string | null;
+
+  // vehicle
+  vehicleMake?: string | null;
+  vehicleModel?: string | null;
+  vehicleYear?: string | null;
+  vehicleVin?: string | null;
+  vehicleReg?: string | null;
+ vehicleKeysReceived?: boolean | null;
+
+// back-compat (older payloads)
+keysReceived?: boolean | null;
+
+
   occurredAtISO?: string | null; // when collection happened
 };
 
@@ -78,9 +114,13 @@ export async function outboxGet(id: string): Promise<OutboxItem | null> {
   return (await withStore('readonly', (store) => store.get(id))) ?? null;
 }
 
-export async function outboxList(): Promise<OutboxItem[]> {
+export async function outboxList(kind?: OutboxItem['kind']): Promise<OutboxItem[]> {
   const items = (await withStore('readonly', (store) => store.getAll())) as any[];
-  return (items ?? []).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+
+  const typed = (items ?? []) as OutboxItem[];
+  const filtered = kind ? typed.filter((x) => x.kind === kind) : typed;
+
+  return filtered.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 }
 
 export async function outboxPatch(id: string, patch: Partial<OutboxItem>) {
@@ -103,3 +143,20 @@ export function safeUuid(): string {
     return v.toString(16);
   });
 }
+
+// Back-compat helpers (older UI expects these names)
+export async function outboxUpdateStatus(
+  id: string,
+  update: {
+    status?: OutboxStatus;
+    server?: OutboxItem['server'] | null;
+    error?: string | null;
+  }
+) {
+  await outboxPatch(id, {
+    status: update.status,
+    server: update.server === undefined ? undefined : update.server,
+    error: update.error,
+  });
+}
+

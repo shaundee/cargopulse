@@ -6,28 +6,42 @@ import { AppNav } from './nav';
 
 export function AppShellClient({ children }: { children: React.ReactNode }) {
   return (
-    <AppShell
-      header={{ height: 56 }}
-      navbar={{ width: 260, breakpoint: 'sm' }}
-      padding="md"
-    >
-      <AppShell.Header>
-        <Group h="100%" px="md" justify="space-between">
-          <Text fw={700}>CargoPulse</Text>
-          <TextInput
-            placeholder="Search tracking code or phone…"
-            leftSection={<IconSearch size={16} />}
-            w={360}
-            visibleFrom="sm"
-          />
-        </Group>
-      </AppShell.Header>
+    <>
+      <style>{`
+        @media print {
+          .mantine-AppShell-header,
+          .mantine-AppShell-navbar {
+            display: none !important;
+          }
+          .mantine-AppShell-main {
+            padding: 0 !important;
+          }
+        }
+      `}</style>
 
-      <AppShell.Navbar p="md">
-        <AppNav />
-      </AppShell.Navbar>
+      <AppShell
+        header={{ height: 56 }}
+        navbar={{ width: 260, breakpoint: 'sm' }}
+        padding="md"
+      >
+        <AppShell.Header>
+          <Group h="100%" px="md" justify="space-between">
+            <Text fw={700}>CargoPulse</Text>
+            <TextInput
+              placeholder="Search tracking code or phone..."
+              leftSection={<IconSearch size={16} />}
+              w={360}
+              visibleFrom="sm"
+            />
+          </Group>
+        </AppShell.Header>
 
-      <AppShell.Main>{children}</AppShell.Main>
-    </AppShell>
+        <AppShell.Navbar p="md">
+          <AppNav />
+        </AppShell.Navbar>
+
+        <AppShell.Main>{children}</AppShell.Main>
+      </AppShell>
+    </>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { Drawer, Paper, Stack, Text, Image, SimpleGrid, Title } from '@mantine/core';
+import { Drawer, Paper, Stack, Text, Image, SimpleGrid, Title, Group } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
@@ -277,6 +277,90 @@ await loadAssets(shipmentId);
         ) : (
           <>
             <ShipmentSummaryCard detailShipment={detailShipment} />
+
+            <Paper withBorder p="sm" radius="md">
+              <Stack gap="xs">
+                <Text fw={700}>Cargo details</Text>
+                {(() => {
+                  const cargoType = (detailShipment as any)?.cargo_type ?? null;
+                  const meta = (detailShipment as any)?.cargo_meta ?? null;
+                  const m = meta && typeof meta === 'object' ? meta : {};
+
+                  const Row = ({ label, value }: { label: string; value: any }) => (
+                    <Group justify="space-between" gap="xs">
+                      <Text size="sm" c="dimmed">
+                        {label}
+                      </Text>
+                      <Text size="sm" fw={600}>
+                        {value ?? '-'}
+                      </Text>
+                    </Group>
+                  );
+
+                  const qty = (m as any).quantity;
+                  const dims = (m as any).dimensions;
+                  const veh = (m as any).vehicle;
+
+                  return (
+                    <Stack gap="xs">
+                      <Row label="Type" value={cargoType ? String(cargoType) : '-'} />
+
+                      {(m as any).pickup_address ? <Row label="Pickup address" value={(m as any).pickup_address} /> : null}
+                      {(m as any).pickup_contact_phone ? <Row label="Pickup contact" value={(m as any).pickup_contact_phone} /> : null}
+                      {(m as any).notes ? <Row label="Notes" value={(m as any).notes} /> : null}
+
+                      {qty != null ? <Row label="Quantity" value={String(qty)} /> : null}
+
+                      {dims && typeof dims === 'object' ? (
+                        <Paper withBorder p="xs" radius="md">
+                          <Stack gap="xs">
+                            <Text size="sm" fw={700}>
+                              Dimensions
+                            </Text>
+                            <Row label="Weight (kg)" value={(dims as any).weight_kg ?? '-'} />
+                            <Row label="Length (cm)" value={(dims as any).length_cm ?? '-'} />
+                            <Row label="Width (cm)" value={(dims as any).width_cm ?? '-'} />
+                            <Row label="Height (cm)" value={(dims as any).height_cm ?? '-'} />
+                            <Row
+                              label="Forklift required"
+                              value={(dims as any).forklift_required == null ? '-' : (dims as any).forklift_required ? 'Yes' : 'No'}
+                            />
+                            {(dims as any).handling_notes ? <Row label="Handling notes" value={(dims as any).handling_notes} /> : null}
+                          </Stack>
+                        </Paper>
+                      ) : null}
+
+                      {veh && typeof veh === 'object' ? (
+                        <Paper withBorder p="xs" radius="md">
+                          <Stack gap="xs">
+                            <Text size="sm" fw={700}>
+                              Vehicle
+                            </Text>
+                            {(veh as any).make ? <Row label="Make" value={(veh as any).make} /> : null}
+                            {(veh as any).model ? <Row label="Model" value={(veh as any).model} /> : null}
+                            {(veh as any).year ? <Row label="Year" value={(veh as any).year} /> : null}
+                            {(veh as any).reg ? <Row label="Reg" value={(veh as any).reg} /> : null}
+                            {(veh as any).vin ? <Row label="VIN" value={(veh as any).vin} /> : null}
+                            <Row
+                              label="Keys received"
+                              value={(veh as any).keys_received == null ? '-' : (veh as any).keys_received ? 'Yes' : 'No'}
+                            />
+                            {(veh as any).handling_notes ? <Row label="Handling notes" value={(veh as any).handling_notes} /> : null}
+                          </Stack>
+                        </Paper>
+                      ) : null}
+
+                      {!cargoType && qty == null && !dims && !veh && !(m as any).pickup_address && !(m as any).pickup_contact_phone && !(m as any).notes ? (
+                        <Text size="sm" c="dimmed">
+                          No cargo details recorded.
+                        </Text>
+                      ) : null}
+                    </Stack>
+                  );
+                })()}
+              </Stack>
+            </Paper>
+
 
             <StatusUpdateCard
   currentStatus={detailShipment.current_status as ShipmentStatus}

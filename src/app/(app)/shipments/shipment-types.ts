@@ -10,6 +10,23 @@ export type ShipmentStatus =
   | 'out_for_delivery'
   | 'delivered';
 
+// Stable ordering for UI sorting (optional)
+export const statusOrder: ShipmentStatus[] = [
+  'received',
+  'collected',
+  'loaded',
+  'departed_uk',
+  'arrived_jamaica',
+  'collected_by_customer',
+  'out_for_delivery',
+  'delivered',
+];
+
+export function statusRank(s: ShipmentStatus) {
+  const idx = statusOrder.indexOf(s);
+  return idx === -1 ? 999 : idx;
+}
+
 export type ShipmentRow = {
   id: string;
   tracking_code: string;
@@ -82,6 +99,10 @@ export type ShipmentDetail = {
   customers?: { name: string; phone: string } | null;
   pod?: PodRow | PodRow[] | null;
   public_tracking_token?: string | null;
+
+  // Cargo
+  cargo_type?: string | null;
+  cargo_meta?: any | null;
 };
 
 export function statusLabel(s: ShipmentStatus) {

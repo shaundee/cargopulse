@@ -1,68 +1,98 @@
 import { notFound } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
-import { Badge, Container, Paper, Stack, Text, Timeline, Title } from '@mantine/core';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { PublicTrackingClient } from './public-tracking-client';
 
-function niceStatus(s: string) {
-  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+function isUuid(s: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 }
 
-export default async function TrackingPage({ params }: { params: { code: string } }) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+export default async function TrackingPage({
+  params,
+}: {
+  params: Promise<{ token: string }>;
+}) {
+  const { token } = await params;
 
-  if (!url || !anon) throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
+  // If someone pastes a shipment ID / random string, treat as not found.
+  if (!token || !isUuid(token)) notFound();
 
-  const supabase = createClient(url, anon);
+  try {
+    const supabase = createSupabaseAdminClient();
 
-  const { data, error } = await supabase.rpc('public_get_tracking', { p_code: params.code });
+    const { data: shipment, error: shipErr } = await supabase
+      .from('shipments')
+      .select(`
+        id, org_id, tracking_code, destination, service_type, current_status, last_event_at,
+        org:organizations(name, support_phone),
+        customer:customers(name)
+      `)
+      .eq('public_tracking_token', token)
+      .maybeSingle();
 
-  if (error || !data) return notFound();
+    if (shipErr) {
+      // In dev: show the real issue instead of lying with 404
+      if (process.env.NODE_ENV !== 'production') {
+        return (
+          <div style={{ padding: 24, fontFamily: 'system-ui' }}>
+            <h2>Public tracking error</h2>
+            <p>Query failed (this would be hidden as 404 in production):</p>
+            <pre style={{ whiteSpace: 'pre-wrap', background: '#f6f6f6', padding: 12, borderRadius: 8 }}>
+              {shipErr.message}
+            </pre>
+            <p style={{ marginTop: 12 }}>
+              Most common cause: <b>SUPABASE_SERVICE_ROLE_KEY</b> missing/incorrect in <b>.env.local</b>.
+            </p>
+          </div>
+        );
+      }
+      notFound();
+    }
 
-  const shipment = data.shipment;
-  const events: Array<{ status: string; occurred_at: string }> = data.events ?? [];
+    if (!shipment) notFound();
 
-  return (
-    <Container size={520} py={40}>
-      <Stack gap="md">
-        <Stack gap={4}>
-          <Title order={2}>Tracking</Title>
-          <Text c="dimmed" size="sm">Code: {shipment.tracking_code}</Text>
-        </Stack>
+    const { data: events } = await supabase
+      .from('shipment_events')
+      .select('status, note, occurred_at')
+      .eq('shipment_id', shipment.id)
+      .order('occurred_at', { ascending: true })
+      .limit(200);
 
-        <Paper withBorder p="lg" radius="md">
-          <Stack gap="md">
-            <Stack gap={6}>
-              <Text fw={700}>Current status</Text>
-              <Badge size="lg">{niceStatus(shipment.status)}</Badge>
-            </Stack>
+    const { data: pod } = await supabase
+      .from('pod')
+      .select('receiver_name, delivered_at, photo_url')
+      .eq('shipment_id', shipment.id)
+      .maybeSingle();
 
-            <Stack gap={6}>
-              <Text fw={700}>Timeline</Text>
+    let podSignedUrl: string | null = null;
+    if (pod?.photo_url) {
+      const { data: signed } = await supabase.storage.from('pod').createSignedUrl(pod.photo_url, 300);
+      podSignedUrl = signed?.signedUrl ?? null;
+    }
 
-              {events.length === 0 ? (
-                <Text c="dimmed" size="sm">No updates yet.</Text>
-              ) : (
-                <Timeline bulletSize={22} lineWidth={2}>
-                  {events.map((e, i) => (
-                    <Timeline.Item key={i} title={niceStatus(e.status)}>
-                      <Text size="sm" c="dimmed">
-                        {new Intl.DateTimeFormat('en-GB', {
-                          dateStyle: 'medium',
-                          timeStyle: 'short',
-                        }).format(new Date(e.occurred_at))}
-                      </Text>
-                    </Timeline.Item>
-                  ))}
-                </Timeline>
-              )}
-            </Stack>
-          </Stack>
-        </Paper>
-
-        <Text c="dimmed" size="xs">
-          Updates are provided by the shipping operator.
-        </Text>
-      </Stack>
-    </Container>
-  );
+    return (
+      <PublicTrackingClient
+        data={{
+          shipment,
+          events: events ?? [],
+          pod: pod ? { ...pod, signed_url: podSignedUrl } : null,
+        }}
+      />
+    );
+  } catch (e: any) {
+    // In dev: show the real issue; in prod: 404.
+    if (process.env.NODE_ENV !== 'production') {
+      return (
+        <div style={{ padding: 24, fontFamily: 'system-ui' }}>
+          <h2>Public tracking crashed</h2>
+          <pre style={{ whiteSpace: 'pre-wrap', background: '#f6f6f6', padding: 12, borderRadius: 8 }}>
+            {e?.message ?? String(e)}
+          </pre>
+          <p style={{ marginTop: 12 }}>
+            Check <b>NEXT_PUBLIC_SUPABASE_URL</b> and <b>SUPABASE_SERVICE_ROLE_KEY</b>.
+          </p>
+        </div>
+      );
+    }
+    notFound();
+  }
 }

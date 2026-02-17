@@ -1,13 +1,24 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Badge, Group, Paper, Stack, Text, Button, CopyButton } from '@mantine/core';
 import type { ShipmentDetail, ShipmentStatus } from '../shipment-types';
 import { statusBadgeColor, statusLabel } from '../shipment-types'
 import { IconCheck, IconCopy } from '@tabler/icons-react';
 
+
+
 export function ShipmentSummaryCard({ detailShipment }: { detailShipment: ShipmentDetail }) {
-    const token = (detailShipment as any).public_tracking_token as string | undefined;
-  const link = token ? `${window.location.origin}/t/${token}` : '';
+  
+const token = (detailShipment as any).public_tracking_token as string | undefined;
+
+const [origin, setOrigin] = useState('');
+useEffect(() => {
+  setOrigin(window.location.origin);
+}, []);
+
+const link = token && origin ? `${origin}/t/${token}` : '';
+
 
   return (
     <Paper withBorder p="sm" radius="md">
@@ -38,7 +49,7 @@ export function ShipmentSummaryCard({ detailShipment }: { detailShipment: Shipme
             </Button>
           )}
         </CopyButton>
-        
+
         <Button
   size="xs"
   variant="light"
