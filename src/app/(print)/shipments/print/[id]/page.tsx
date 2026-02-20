@@ -7,18 +7,18 @@ export default async function ShipmentPrintPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-
-  function labelStatus(s: unknown) {
-  switch (String(s ?? '')) {
+function labelStatus(status: unknown, destination?: string | null) {
+  switch (String(status ?? '')) {
     case 'received': return 'Received';
     case 'collected': return 'Collected';
     case 'loaded': return 'Loaded';
     case 'departed_uk': return 'Departed (UK)';
-    case 'arrived_jamaica': return 'Arrived at destination';
+    case 'arrived_destination':
+      return destination ? `Arrived (${destination})` : 'Arrived (destination)';
     case 'out_for_delivery': return 'Out for delivery';
     case 'collected_by_customer': return 'Collected by customer';
     case 'delivered': return 'Delivered';
-    default: return String(s ?? '');
+    default: return String(status ?? '');
   }
 }
 
@@ -76,7 +76,7 @@ export default async function ShipmentPrintPage({
         <div><span className="label">Customer:</span> {(shipment as any).customers?.name ?? '—'} • {(shipment as any).customers?.phone ?? '—'}</div>
         <div><span className="label">Destination:</span> {shipment.destination}</div>
         <div><span className="label">Service:</span> {shipment.service_type}</div>
-        <div><span className="label">Status:</span> {labelStatus(shipment.current_status)}</div>
+        <div><span className="label">Status:</span> {labelStatus(shipment.current_status, shipment.destination)}</div>
 
       </div>
 
@@ -85,10 +85,10 @@ export default async function ShipmentPrintPage({
       {(events ?? []).length ? (
         (events ?? []).map((e, idx) => (
           <div key={idx} className="event">
-        <div><span className="label">{labelStatus((e as any).status)}</span></div>
-            <div style={{ color: '#555', fontSize: 13 }}>
-              {(e as any).occurred_at ? new Date(String((e as any).occurred_at)).toLocaleString() : '—'}
-            </div>
+        <div><span className="label">{labelStatus(e.status, shipment.destination)}</span></div>
+<div style={{ color: '#555', fontSize: 13 }}>
+  {(() => { const d = e?.occurred_at ? new Date(String(e.occurred_at)) : null; return d && !isNaN(d.getTime()) ? d.toLocaleString() : '—'; })()}
+</div>
             {(e as any).note ? <div style={{ marginTop: 6 }}>{String((e as any).note)}</div> : null}
           </div>
         ))

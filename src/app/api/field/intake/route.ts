@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
+import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
+import { renderTemplate } from '@/lib/messaging/render-template';
 
-function renderTemplate(body: string, vars: Record<string, string>) {
-  return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
-}
 
 function extFor(contentType: string) {
   const ct = String(contentType || '').toLowerCase();
@@ -250,7 +249,7 @@ export async function POST(req: Request) {
       cargo_type: cargoTypeSafe,
       cargo_meta: cargoMeta,
     })
-    .select('id, tracking_code')
+    .select('id, tracking_code, public_tracking_token')
     .single();
 
   if (shipErr) {
@@ -343,12 +342,18 @@ export async function POST(req: Request) {
       .maybeSingle();
 
     if (tpl?.id && phone) {
+      const baseUrl = getBaseUrlFromHeaders(req.headers);
+      const token = (shipment as any).public_tracking_token as string | null;
+      const trackingUrl = token && baseUrl ? `${baseUrl}/t/${token}` : '';
+
       const rendered = renderTemplate(String(tpl.body ?? ''), {
         customer_name: customerName,
         tracking_code: shipment.tracking_code ?? '',
         destination,
         status: 'collected',
-        // backwards compat
+        tracking_url: trackingUrl,
+
+        // backwards-compat vars
         name: customerName,
         code: shipment.tracking_code ?? '',
       });

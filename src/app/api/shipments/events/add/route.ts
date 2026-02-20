@@ -24,6 +24,7 @@ export async function POST(req: Request) {
   const status = String(body?.status ?? '').trim();
   const note = body?.note == null ? null : String(body.note).trim();
   const autoLog = Boolean(body?.autoLog ?? false);
+  const templateId = body?.templateId == null ? null : String(body.templateId).trim();
 
   if (!shipmentId) return NextResponse.json({ error: 'shipmentId is required' }, { status: 400 });
   if (!status) return NextResponse.json({ error: 'status is required' }, { status: 400 });
@@ -68,19 +69,23 @@ export async function POST(req: Request) {
       if (!customerPhone) {
         auto_message = { ok: true, skipped: true, reason: 'no_customer_phone' };
       } else {
-        const { data: tpl, error: tplErr } = await supabase
+        const tplQuery = supabase
           .from('message_templates')
           .select('id, body, enabled, status')
           .eq('org_id', shipment.org_id)
-          .eq('status', status)
-          .eq('enabled', true)
-          .limit(1)
-          .maybeSingle();
+          .eq('enabled', true);
+
+        const { data: tpl, error: tplErr } = templateId
+          ? await tplQuery.eq('id', templateId).maybeSingle()
+          : await tplQuery.eq('status', status).limit(1).maybeSingle();
 
         if (tplErr) {
           auto_message = { ok: false, skipped: true, reason: 'template_lookup_failed', error: tplErr.message };
         } else if (!tpl?.id) {
           auto_message = { ok: true, skipped: true, reason: 'no_enabled_template' };
+        } else if (String(tpl.status ?? '') && String(tpl.status ?? '') !== String(status)) {
+          // Guard: prevent sending a template for the wrong milestone
+          auto_message = { ok: false, skipped: true, reason: 'template_status_mismatch', error: 'Template status does not match selected status' };
         } else {
 
           const baseUrl = getBaseUrlFromHeaders(req.headers);

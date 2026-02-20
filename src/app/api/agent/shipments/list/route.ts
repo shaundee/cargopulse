@@ -29,7 +29,10 @@ export async function GET(req: Request) {
 
   let query = supabase
     .from('shipments')
-    .select('id, tracking_code, destination, current_status, last_event_at, customers(name, phone)')
+    .select(`
+  id, org_id, tracking_code, destination, service_type, current_status, last_event_at, public_tracking_token,
+  customer:customers(name, phone)
+`)
     .eq('org_id', member.org_id)
     .order('last_event_at', { ascending: false })
     .limit(200);
@@ -48,6 +51,7 @@ export async function GET(req: Request) {
       destination: s.destination ?? null,
       current_status: s.current_status,
       last_event_at: s.last_event_at ?? null,
+      public_tracking_token: s.public_tracking_token ?? null,
       customer_name: c?.name ?? null,
       customer_phone: c?.phone ?? null,
     };

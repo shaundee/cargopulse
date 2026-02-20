@@ -50,7 +50,7 @@ create type public.shipment_status as enum (
   'received',
   'loaded',
   'departed_uk',
-  'arrived_jamaica',
+  'arrived_destination',
   'out_for_delivery',
   'delivered'
 );

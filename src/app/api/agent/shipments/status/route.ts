@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
+import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
+import { renderTemplate } from '@/lib/messaging/render-template';
 
-function renderTemplate(body: string, vars: Record<string, string>) {
-  return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
-}
 
 export async function POST(req: Request) {
   const supabase = await createSupabaseServerClient();
@@ -21,7 +20,8 @@ export async function POST(req: Request) {
 
   if (!shipmentId) return NextResponse.json({ error: 'shipmentId is required' }, { status: 400 });
 
-  const allowed = new Set(['arrived_jamaica', 'collected_by_customer']);
+ const allowed = new Set(['arrived_destination', 'collected_by_customer', 'out_for_delivery']);
+
   if (!allowed.has(status)) return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
 
   const { data: member, error: memberErr } = await supabase
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   // Load shipment + customer (org-scoped)
   const { data: shipment, error: shipErr } = await supabase
     .from('shipments')
-    .select('id, org_id, tracking_code, destination, current_status, customers(name, phone)')
+    .select('id, org_id, tracking_code, public_tracking_token, destination, current_status, customers(name, phone)')
     .eq('id', shipmentId)
     .eq('org_id', member.org_id)
     .maybeSingle();
@@ -49,13 +49,17 @@ export async function POST(req: Request) {
   if (shipErr) return NextResponse.json({ error: shipErr.message }, { status: 400 });
   if (!shipment) return NextResponse.json({ error: 'Shipment not found' }, { status: 404 });
 
+  const baseUrl = getBaseUrlFromHeaders(req.headers);
+  const token = (shipment as any).public_tracking_token as string | null;
+  const trackingUrl = token && baseUrl ? `${baseUrl}/t/${token}` : '';
+
   if (shipment.current_status === 'delivered') {
     return NextResponse.json({ error: 'Delivered is terminal' }, { status: 409 });
   }
 
   // 1) Insert shipment_event
   const note =
-    status === 'arrived_jamaica'
+    status === 'arrived_destination'
       ? 'Arrived at destination'
       : status === 'collected_by_customer'
         ? 'Collected by customer'
@@ -97,7 +101,10 @@ export async function POST(req: Request) {
       customer_name: customerName,
       tracking_code: shipment.tracking_code ?? '',
       destination: shipment.destination ?? '',
-      // backwards compat
+      status: String(tpl.status ?? status),
+      tracking_url: trackingUrl,
+
+      // backwards-compat vars
       name: customerName,
       code: shipment.tracking_code ?? '',
     });

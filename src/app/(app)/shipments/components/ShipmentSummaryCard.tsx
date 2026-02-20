@@ -61,7 +61,7 @@ const link = token && origin ? `${origin}/t/${token}` : '';
 
 
           <Badge color={statusBadgeColor(detailShipment.current_status as ShipmentStatus)} variant="light">
-            {statusLabel(detailShipment.current_status as ShipmentStatus)}
+            {statusLabel(detailShipment.current_status as ShipmentStatus, detailShipment.destination)}
           </Badge>
         </Group>
       </Stack>

@@ -6,7 +6,7 @@ const defaults = [
   { status: 'collected', body: 'Hi {{name}}, we collected your shipment ({{code}}) in the UK.\nTrack: {{tracking_url}}' },
   { status: 'loaded', body: 'Update: shipment {{code}} has been loaded and is preparing to depart.\nTrack: {{tracking_url}}' },
   { status: 'departed_uk', body: 'Update: shipment {{code}} has departed the UK.\nTrack: {{tracking_url}}' },
-  { status: 'arrived_jamaica', body: 'Update: shipment {{code}} has arrived at its destination ({{destination}}).\nTrack: {{tracking_url}}' },
+  { status: 'arrived_destination',body: "Update: shipment {{code}} has arrived at its destination ({{destination}}).\nTrack: {{tracking_url}}"},
   { status: 'collected_by_customer', body: 'Update: shipment {{code}} has been collected by the recipient.\nTrack: {{tracking_url}}' },
   { status: 'out_for_delivery', body: 'Update: shipment {{code}} is out for delivery.\nTrack: {{tracking_url}}' },
   { status: 'delivered', body: 'Delivered: shipment {{code}} has been delivered. Thank you.\nTrack: {{tracking_url}}' },

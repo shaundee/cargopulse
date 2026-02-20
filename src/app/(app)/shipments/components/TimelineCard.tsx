@@ -8,9 +8,11 @@ import { IconDownload } from '@tabler/icons-react';
 export function TimelineCard({
   detailEvents,
   trackingCode,
+  destination,
 }: {
   detailEvents: ShipmentEventRow[];
   trackingCode?: string;
+  destination?: string | null
 }) {
 
   return (
@@ -55,7 +57,7 @@ export function TimelineCard({
             <Paper key={ev.id} withBorder p="sm" radius="md">
               <Group justify="space-between" align="flex-start">
                 <Stack gap={2}>
-                  <Text fw={600}>{statusLabel(ev.status as ShipmentStatus)}</Text>
+                 <Text fw={600}>{statusLabel(ev.status as ShipmentStatus, destination)}</Text>
                   {ev.note ? (
                     <Text size="sm" c="dimmed">
                       {ev.note}

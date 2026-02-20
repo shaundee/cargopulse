@@ -7,9 +7,11 @@ import { formatWhen, statusLabel } from '../shipment-types';
 export function MessageHistoryCard({
   detailLogs,
   detailLogsLoading,
+  destination
 }: {
   detailLogs: MessageLogRow[];
   detailLogsLoading: boolean;
+  destination?: string | null;
 }) {
   return (
     <Paper withBorder p="sm" radius="md">
@@ -44,7 +46,7 @@ export function MessageHistoryCard({
                     </Badge>
                     {log.status ? (
                       <Badge variant="light" color="blue">
-                        {statusLabel(log.status as ShipmentStatus)}
+                        {statusLabel(log.status as ShipmentStatus, destination)}
                       </Badge>
                     ) : null}
                   </Group>

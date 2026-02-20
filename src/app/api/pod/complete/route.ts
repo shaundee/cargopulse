@@ -24,6 +24,12 @@ export async function POST(req: Request) {
   const receiverName = String(form.get('receiverName') ?? '').trim();
   const file = form.get('file');
 
+  // Optional message send/log controls
+  const sendUpdateRaw = form.get('sendUpdate');
+  const sendUpdate = sendUpdateRaw == null ? true : String(sendUpdateRaw) === 'true';
+  const templateIdRaw = form.get('templateId');
+  const templateId = templateIdRaw == null ? null : String(templateIdRaw).trim() || null;
+
   if (!shipmentId) return NextResponse.json({ error: 'shipmentId is required' }, { status: 400 });
   if (!receiverName) return NextResponse.json({ error: 'receiverName is required' }, { status: 400 });
   if (!file || !(file instanceof Blob)) {
@@ -88,6 +94,7 @@ export async function POST(req: Request) {
   if (podErr) return NextResponse.json({ error: podErr.message }, { status: 400 });
 
   // Only first-time delivery: create delivered event + set shipment delivered
+  let auto_message: any = null;
   if (!alreadyDelivered) {
     const { error: evErr } = await supabase.from('shipment_events').insert({
       shipment_id: shipmentId,
@@ -105,116 +112,126 @@ export async function POST(req: Request) {
 
     if (sErr) return NextResponse.json({ error: sErr.message }, { status: 400 });
 
-    // Best-effort auto-log delivered message ONCE
-    try {
-      const { data: tpl, error: tplErr } = await supabase
-        .from('message_templates')
-        .select('id, body, enabled')
-        .eq('org_id', orgId)
-        .eq('status', 'delivered')
-        .eq('enabled', true)
-        .limit(1)
-        .maybeSingle();
+    // Optional send/log delivered message (default: true, to preserve existing behavior)
+    if (sendUpdate) {
+      try {
+        const tplQuery = supabase
+          .from('message_templates')
+          .select('id, body, enabled, status')
+          .eq('org_id', orgId)
+          .eq('enabled', true);
 
-      if (tplErr) {
-        console.warn('[pod/complete] template lookup failed', tplErr.message);
-      } else if (!tpl?.id) {
-        console.warn('[pod/complete] no enabled delivered template found for org', orgId);
-      } else {
-        // customer phone is required (DB constraint)
-        let customerName = '';
-        let customerPhone: string | null = null;
+        const { data: tpl, error: tplErr } = templateId
+          ? await tplQuery.eq('id', templateId).maybeSingle()
+          : await tplQuery.eq('status', 'delivered').limit(1).maybeSingle();
 
-        if (shipment.customer_id) {
-          const { data: cust, error: custErr } = await supabase
-            .from('customers')
-            .select('name, phone')
-            .eq('id', shipment.customer_id)
-            .maybeSingle();
-
-          if (custErr) console.warn('[pod/complete] customer lookup failed', custErr.message);
-
-          customerName = cust?.name ?? '';
-          customerPhone = (cust?.phone ?? '').trim() || null;
-        }
-
-        if (!customerPhone) {
-          console.warn('[pod/complete] skipping auto-log: customer phone missing', { shipmentId });
+        if (tplErr) {
+          auto_message = { ok: false, skipped: true, reason: 'template_lookup_failed', error: tplErr.message };
+        } else if (!tpl?.id) {
+          auto_message = { ok: true, skipped: true, reason: 'no_enabled_template' };
+        } else if (String(tpl.status ?? '') && String(tpl.status ?? '') !== 'delivered') {
+          auto_message = { ok: false, skipped: true, reason: 'template_status_mismatch', error: 'Template status does not match delivered' };
         } else {
+          // customer phone is required
+          let customerName = '';
+          let customerPhone: string | null = null;
 
-          const baseUrl = getBaseUrlFromHeaders(req.headers);
-const trackingUrl =
-  shipment.public_tracking_token && baseUrl
-    ? `${baseUrl}/t/${shipment.public_tracking_token}`
-    : '';
+          if (shipment.customer_id) {
+            const { data: cust, error: custErr } = await supabase
+              .from('customers')
+              .select('name, phone')
+              .eq('id', shipment.customer_id)
+              .maybeSingle();
 
-const rendered = renderTemplate(String(tpl.body ?? ''), {
-  customer_name: customerName,
-  tracking_code: shipment.tracking_code ?? '',
-  destination: shipment.destination ?? '',
-  status: 'delivered',
-  tracking_url: trackingUrl,
-
-  name: customerName,
-  code: shipment.tracking_code ?? '',
-});
-          const toE164 = normalizeE164Phone(customerPhone);
-          const shouldSend = isTwilioConfigured() && Boolean(toE164);
-
-          const provider = shouldSend ? 'twilio_whatsapp' : 'log';
-          const initialSendStatus = shouldSend ? 'queued' : 'logged';
-
-          const { data: logRow, error: insErr } = await supabase
-            .from('message_logs')
-            .insert({
-              org_id: orgId,
-              shipment_id: shipmentId,
-              template_id: tpl.id,
-              to_phone: customerPhone,
-              provider,
-              send_status: initialSendStatus,
-              body: rendered,
-              status: 'delivered',
-              sent_at: new Date().toISOString(),
-              error: null,
-            })
-            .select('id')
-            .single();
-
-          // 23505 = already logged -> ignore & DO NOT send again
-          if (insErr && (insErr as any).code !== '23505') {
-            console.warn('[pod/complete] auto-log insert failed', insErr);
+            if (custErr) console.warn('[pod/complete] customer lookup failed', custErr.message);
+            customerName = cust?.name ?? '';
+            customerPhone = (cust?.phone ?? '').trim() || null;
           }
 
-          if (!insErr && shouldSend && logRow?.id) {
-            try {
-              const r = await twilioSendWhatsApp({ toE164: toE164!, body: rendered });
+          if (!customerPhone) {
+            auto_message = { ok: true, skipped: true, reason: 'no_customer_phone' };
+          } else {
+            const baseUrl = getBaseUrlFromHeaders(req.headers);
+            const trackingUrl =
+              shipment.public_tracking_token && baseUrl ? `${baseUrl}/t/${shipment.public_tracking_token}` : '';
 
-              await supabase
-                .from('message_logs')
-                .update({
-                  provider_message_id: r.sid,
-                  send_status: r.status,
-                  error: null,
-                  sent_at: new Date().toISOString(),
-                })
-                .eq('id', logRow.id);
-            } catch (e: any) {
-              await supabase
-                .from('message_logs')
-                .update({
-                  send_status: 'failed',
-                  error: e?.message ?? 'Send failed',
-                })
-                .eq('id', logRow.id);
+            const rendered = renderTemplate(String(tpl.body ?? ''), {
+              customer_name: customerName,
+              tracking_code: shipment.tracking_code ?? '',
+              destination: shipment.destination ?? '',
+              status: 'delivered',
+              tracking_url: trackingUrl,
+
+              name: customerName,
+              code: shipment.tracking_code ?? '',
+            });
+
+            const toE164 = normalizeE164Phone(customerPhone);
+            const shouldSend = isTwilioConfigured() && Boolean(toE164);
+
+            const provider = shouldSend ? 'twilio_whatsapp' : 'log';
+            const initialSendStatus = shouldSend ? 'queued' : 'logged';
+
+            const { data: logRow, error: insErr } = await supabase
+              .from('message_logs')
+              .insert({
+                org_id: orgId,
+                shipment_id: shipmentId,
+                template_id: tpl.id,
+                to_phone: customerPhone,
+                provider,
+                send_status: initialSendStatus,
+                body: rendered,
+                status: 'delivered',
+                sent_at: new Date().toISOString(),
+                error: null,
+              })
+              .select('id')
+              .single();
+
+            if (insErr) {
+              // unique delivered-per-shipment index may fire
+              if ((insErr as any).code === '23505') {
+                auto_message = { ok: true, skipped: true, reason: 'already_notified' };
+              } else {
+                auto_message = { ok: false, skipped: true, reason: 'log_insert_failed', error: insErr.message };
+              }
+            } else if (!shouldSend) {
+              auto_message = { ok: true, mode: 'logged_only', log_id: logRow.id, phone_ok: Boolean(toE164) };
+            } else {
+              try {
+                const r = await twilioSendWhatsApp({ toE164: toE164!, body: rendered });
+
+                await supabase
+                  .from('message_logs')
+                  .update({
+                    provider_message_id: r.sid,
+                    send_status: r.status,
+                    error: null,
+                    sent_at: new Date().toISOString(),
+                  })
+                  .eq('id', logRow.id);
+
+                auto_message = { ok: true, mode: 'sent', log_id: logRow.id, sid: r.sid, status: r.status };
+              } catch (e: any) {
+                await supabase
+                  .from('message_logs')
+                  .update({
+                    send_status: 'failed',
+                    error: e?.message ?? 'Send failed',
+                  })
+                  .eq('id', logRow.id);
+
+                auto_message = { ok: false, mode: 'failed', log_id: logRow.id, error: e?.message ?? 'Send failed' };
+              }
             }
           }
         }
+      } catch (e: any) {
+        auto_message = { ok: false, skipped: true, reason: 'unexpected', error: e?.message ?? String(e) };
       }
-    } catch (e: any) {
-      console.warn('[pod/complete] auto-log unexpected error', e?.message ?? e);
     }
   }
 
-  return NextResponse.json({ ok: true, path });
+  return NextResponse.json({ ok: true, path, auto_message });
 }

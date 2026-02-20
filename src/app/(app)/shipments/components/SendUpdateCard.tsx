@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Group, Paper, Select, Stack, Text, Textarea } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
 
 type TemplateRow = {
   id: string;
@@ -23,6 +24,7 @@ export function SendUpdateCard({
   customerPhone,
   trackingCode,
   destination,
+  publicTrackingToken,
   onSent,
 }: {
   disabled: boolean;
@@ -33,6 +35,7 @@ export function SendUpdateCard({
   customerPhone: string;
   trackingCode: string;
   destination: string;
+  publicTrackingToken?: string | null;
   onSent?: () => void;
 }) {
   const [sending, setSending] = useState(false);
@@ -51,6 +54,12 @@ export function SendUpdateCard({
     [enabledTemplates, templateId]
   );
 
+  const trackingUrl = useMemo(() => {
+    if (!publicTrackingToken) return '';
+    if (typeof window === 'undefined') return '';
+    return `${window.location.origin}/t/${publicTrackingToken}`;
+  }, [publicTrackingToken]);
+
   const preview = useMemo(() => {
     if (!selected?.body) return '';
     return renderTemplate(selected.body, {
@@ -60,8 +69,9 @@ export function SendUpdateCard({
       code: trackingCode ?? '',
       destination: destination ?? '',
       status: currentStatus ?? '',
+      tracking_url: trackingUrl ?? '',
     });
-  }, [selected?.body, customerName, trackingCode, destination, currentStatus]);
+  }, [selected?.body, customerName, trackingCode, destination, currentStatus, trackingUrl]);
 
   async function send() {
     if (!templateId) return;
@@ -77,11 +87,36 @@ export function SendUpdateCard({
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error ?? 'Send failed');
 
+      if (json?.skipped) {
+        const reason = String(json?.reason ?? 'skipped');
+        notifications.show({
+          title: 'Skipped',
+          message: reason === 'duplicate_delivered' ? 'Delivered update already logged.' : reason,
+          color: 'yellow',
+        });
+      } else if (json?.mode === 'sent') {
+        notifications.show({
+          title: 'Sent',
+          message: 'WhatsApp update sent and logged.',
+          color: 'green',
+        });
+      } else {
+        const phoneNote = json?.phone_ok ? '' : ' (phone not valid for WhatsApp)';
+        notifications.show({
+          title: 'Logged',
+          message: `Update logged${phoneNote}.`,
+          color: 'blue',
+        });
+      }
+
       onSent?.();
+    } catch (e: any) {
+      notifications.show({ title: 'Send failed', message: e?.message ?? 'Request failed', color: 'red' });
     } finally {
       setSending(false);
     }
   }
+
 
   return (
     <Paper withBorder p="md" radius="md">
@@ -92,6 +127,13 @@ export function SendUpdateCard({
             <Text size="sm" c="dimmed">
               {customerPhone ? `To: ${customerPhone}` : 'No customer phone on file.'}
             </Text>
+            {trackingUrl ? (
+              <Text size="sm" c="dimmed">
+                <a href={trackingUrl} target="_blank" rel="noreferrer">
+                  Open tracking link
+                </a>
+              </Text>
+            ) : null}
           </Stack>
           <Text size="sm" c="dimmed">
             Status: {currentStatus}

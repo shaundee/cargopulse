@@ -2,7 +2,6 @@
 
 import { Drawer, Paper, Stack, Text, Image, SimpleGrid, Title, Group } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import type { ShipmentDetail, ShipmentEventRow, TemplateRow, MessageLogRow, ShipmentStatus } from '../shipment-types';
 import { getExistingPod } from '../shipment-types';
@@ -33,8 +32,6 @@ export function ShipmentDetailDrawer({
   void openShipmentDetail(shipmentId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [opened, shipmentId]);
-  const router = useRouter();
-
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailShipment, setDetailShipment] = useState<ShipmentDetail | null>(null);
   const [detailEvents, setDetailEvents] = useState<ShipmentEventRow[]>([]);
@@ -42,13 +39,10 @@ export function ShipmentDetailDrawer({
   const [detailLogsLoading, setDetailLogsLoading] = useState(false);
 
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
-  const [sendTemplateId, setSendTemplateId] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
 
   const [eventStatus, setEventStatus] = useState<ShipmentStatus>('received');
   const [eventNote, setEventNote] = useState('');
   const [eventSaving, setEventSaving] = useState(false);
-  const [autoLog, setAutoLog] = useState(true);
 
   const [podReceiver, setPodReceiver] = useState('');
   const [podFile, setPodFile] = useState<File | null>(null);
@@ -58,7 +52,7 @@ export function ShipmentDetailDrawer({
   const [assets, setAssets] = useState<Array<{ id: string; kind: string; url: string | null; created_at: string }>>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
 
-  async function loadTemplatesAndSelect(currentStatus: ShipmentStatus) {
+  async function loadTemplatesAndSelect(_currentStatus: ShipmentStatus) {
     try {
       const tRes = await fetch('/api/message-templates');
       const tCt = tRes.headers.get('content-type') || '';
@@ -68,9 +62,6 @@ export function ShipmentDetailDrawer({
       if (tRes.ok && tIsJson) {
         const list: TemplateRow[] = (tPayload.templates ?? []) as TemplateRow[];
         setTemplates(list);
-
-        const match = list.find((t) => t.enabled && t.status === currentStatus);
-        setSendTemplateId(match?.id ?? null);
       }
     } catch {
       // ignore
@@ -116,7 +107,6 @@ async function loadAssets(shipmentId: string) {
     setDetailLogs([]);
     // reset send UI
     setTemplates([]);
-    setSendTemplateId(null);
 await loadAssets(shipmentId);
 
     try {
@@ -148,11 +138,14 @@ await loadAssets(shipmentId);
     }
   }
 
-  async function addEvent() {
+  async function addEvent(opts?: { sendUpdate?: boolean; templateId?: string | null }) {
     if (!detailShipment?.id) return;
 
     setEventSaving(true);
     try {
+      const sendUpdate = Boolean(opts?.sendUpdate ?? false);
+      const templateId = (opts?.templateId ?? null) ? String(opts?.templateId) : null;
+
       const res = await fetch('/api/shipments/events/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -160,7 +153,8 @@ await loadAssets(shipmentId);
   shipmentId: detailShipment.id,
   status: eventStatus,
   note: eventNote || null,
-  autoLog,
+  autoLog: sendUpdate,
+  templateId,
 }),
       });
 
@@ -174,6 +168,20 @@ await loadAssets(shipmentId);
 
       notifications.show({ title: 'Status updated', message: 'Timeline updated', color: 'green' });
 
+      // If we attempted a message, surface the mode (sent/logged/skipped/failed)
+      if (sendUpdate && isJson) {
+        const m = payload?.auto_message;
+        if (m?.skipped) {
+          notifications.show({ title: 'Message skipped', message: String(m?.reason ?? 'skipped'), color: 'yellow' });
+        } else if (m?.ok && m?.mode === 'sent') {
+          notifications.show({ title: 'Message sent', message: 'WhatsApp queued/sent', color: 'green' });
+        } else if (m?.ok && m?.mode === 'logged_only') {
+          notifications.show({ title: 'Message logged', message: 'Twilio not configured or invalid phone', color: 'blue' });
+        } else if (m && m?.ok === false) {
+          notifications.show({ title: 'Message failed', message: String(m?.error ?? 'Send failed'), color: 'red' });
+        }
+      }
+
    
 
       onReloadRequested();
@@ -182,35 +190,6 @@ await loadAssets(shipmentId);
       notifications.show({ title: 'Update failed', message: e?.message ?? 'Could not update status', color: 'red' });
     } finally {
       setEventSaving(false);
-    }
-  }
-
-  async function sendUpdate() {
-    if (!detailShipment?.id || !sendTemplateId) return;
-
-    setSending(true);
-    try {
-      const res = await fetch('/api/messages/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shipmentId: detailShipment.id, templateId: sendTemplateId }),
-      });
-
-      const ct = res.headers.get('content-type') || '';
-      const isJson = ct.includes('application/json');
-      const payload = isJson ? await res.json() : await res.text();
-
-      if (!res.ok) {
-        throw new Error(isJson ? (payload?.error ?? `Send failed (${res.status})`) : `Send failed (${res.status})`);
-      }
-
-      notifications.show({ title: 'Sent (logged)', message: 'Message saved to logs', color: 'green' });
-
-      await openShipmentDetail(detailShipment.id);
-    } catch (e: any) {
-      notifications.show({ title: 'Send failed', message: e?.message ?? 'Could not send message', color: 'red' });
-    } finally {
-      setSending(false);
     }
   }
 
@@ -368,8 +347,11 @@ await loadAssets(shipmentId);
   setEventStatus={setEventStatus}
   eventNote={eventNote}
   setEventNote={setEventNote}
-  autoLog={autoLog}
-  setAutoLog={setAutoLog}
+  templates={templates}
+  customerName={detailShipment.customers?.name ?? ''}
+  trackingCode={detailShipment.tracking_code}
+  destination={detailShipment.destination ?? ''}
+  publicTrackingToken={detailShipment.public_tracking_token ?? null}
   onSave={addEvent}
   saving={eventSaving}
 />
@@ -386,7 +368,8 @@ await loadAssets(shipmentId);
   customerPhone={detailShipment.customers?.phone ?? ''}
   trackingCode={detailShipment.tracking_code}
   destination={detailShipment.destination ?? ''}
- onSent={() => void openShipmentDetail(detailShipment.id)}
+  publicTrackingToken={detailShipment.public_tracking_token ?? null}
+  onSent={() => void openShipmentDetail(detailShipment.id)}
 
 />
 

@@ -318,7 +318,7 @@ export default function ShipmentsClient({
                 { value: 'collected', label: statusLabel('collected') },
                 { value: 'loaded', label: statusLabel('loaded') },
                 { value: 'departed_uk', label: statusLabel('departed_uk') },
-                { value: 'arrived_jamaica', label: statusLabel('arrived_jamaica') },
+                { value: 'arrived_destination', label: statusLabel('arrived_destination') },
                 { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
                 { value: 'delivered', label: statusLabel('delivered') },
               ]}
@@ -386,7 +386,7 @@ export default function ShipmentsClient({
                     { value: 'collected', label: statusLabel('collected') },
                     { value: 'loaded', label: statusLabel('loaded') },
                     { value: 'departed_uk', label: statusLabel('departed_uk') },
-                    { value: 'arrived_jamaica', label: statusLabel('arrived_jamaica') },
+                    { value: 'arrived_destination', label: statusLabel('arrived_destination') },
                     { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
                   ]}
                   w={220}
@@ -450,7 +450,7 @@ export default function ShipmentsClient({
               title: 'Status',
               render: (r) => (
                 <Badge color={statusBadgeColor(r.current_status)} variant="light">
-                  {statusLabel(r.current_status)}
+                  {statusLabel(r.current_status, r.destination)}
                 </Badge>
               ),
             },

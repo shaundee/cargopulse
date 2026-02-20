@@ -10,7 +10,7 @@ type ShipmentStatus =
   | 'collected'
   | 'loaded'
   | 'departed_uk'
-  | 'arrived_jamaica'
+  | 'arrived_destination'
   | 'collected_by_customer'
   | 'out_for_delivery'
   | 'delivered';
@@ -29,7 +29,7 @@ const STATUS_OPTIONS = [
   { value: 'collected', label: 'Collected' },
   { value: 'loaded', label: 'Loaded' },
   { value: 'departed_uk', label: 'Departed UK' },
- { value: 'arrived_jamaica', label: 'Arrived at destination' },
+ { value: 'arrived_destination', label: 'Arrived at destination' },
   { value: 'collected_by_customer', label: 'Collected by customer' },
   { value: 'out_for_delivery', label: 'Out for delivery' },
   { value: 'delivered', label: 'Delivered' },
@@ -157,42 +157,14 @@ async function savePaymentTemplate() {
           <TextInput
             placeholder="Search templates…"
             value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
+            onChange={(e) => {
+  const v = e.currentTarget.value;
+  setQuery(v);
+}}
             w={360}
           />
         </Group>
-<Paper p="md" withBorder radius="md">
-  <Stack gap="sm">
-    <Text fw={700}>Payment reminder template</Text>
-    <Text size="sm" c="dimmed">
-      Used by the “Send payment reminder” button on a shipment.
-    </Text>
 
-    <Textarea
-      label="Body"
-      minRows={4}
-      value={paymentTpl?.body ?? ''}
-      onChange={(e) => setPaymentTpl((p) => ({ ...(p ?? { body: '', enabled: true }), body: e.currentTarget.value }))}
-      placeholder="Hi {{name}}, your balance for shipment {{code}} is {{balance}}…"
-    />
-
-    <Switch
-      checked={paymentTpl?.enabled ?? true}
-      onChange={(e) => setPaymentTpl((p) => ({ ...(p ?? { body: '', enabled: true }), enabled: e.currentTarget.checked }))}
-      label="Enabled"
-    />
-
-    <Group justify="flex-end">
-      <Button variant="light" onClick={savePaymentTemplate} disabled={!paymentTpl}>
-        Save payment template
-      </Button>
-    </Group>
-
-    <Text size="sm" c="dimmed">
-      Variables: {'{{name}}'} {'{{code}}'} {'{{balance}}'} {'{{charged}}'} {'{{paid}}'}
-    </Text>
-  </Stack>
-</Paper>
 
         <DataTable
           records={filtered}
@@ -231,7 +203,10 @@ async function savePaymentTemplate() {
           <Textarea
             label="Message body"
             value={form.body}
-            onChange={(e) => setForm((f) => ({ ...f, body: e.currentTarget.value }))}
+            onChange={(e) => {
+  const v = e.currentTarget.value;
+  setForm((f) => ({ ...f, body: v }));
+}}
             minRows={6}
             placeholder={
               'Hi {{customer_name}}, your shipment {{tracking_code}} is now {{status}}. Destination: {{destination}}.'
@@ -240,7 +215,10 @@ async function savePaymentTemplate() {
 
           <Switch
             checked={form.enabled}
-            onChange={(e) => setForm((f) => ({ ...f, enabled: e.currentTarget.checked }))}
+           onChange={(e) => {
+  const checked = e.currentTarget.checked;
+  setForm((f) => ({ ...f, enabled: checked }));
+}}
             label="Enabled"
           />
 

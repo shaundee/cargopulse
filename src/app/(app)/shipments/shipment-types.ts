@@ -5,7 +5,7 @@ export type ShipmentStatus =
   | 'collected'
   | 'loaded'
   | 'departed_uk'
-  | 'arrived_jamaica'
+  | 'arrived_destination'
   | 'collected_by_customer'
   | 'out_for_delivery'
   | 'delivered';
@@ -16,7 +16,7 @@ export const statusOrder: ShipmentStatus[] = [
   'collected',
   'loaded',
   'departed_uk',
-  'arrived_jamaica',
+  'arrived_destination',
   'collected_by_customer',
   'out_for_delivery',
   'delivered',
@@ -105,8 +105,8 @@ export type ShipmentDetail = {
   cargo_meta?: any | null;
 };
 
-export function statusLabel(s: ShipmentStatus) {
-  switch (s) {
+export function statusLabel(status: ShipmentStatus, destination?: string | null) {
+  switch (status) {
     case 'received':
       return 'Received';
     case 'collected':
@@ -115,8 +115,8 @@ export function statusLabel(s: ShipmentStatus) {
       return 'Loaded';
     case 'departed_uk':
       return 'Departed UK';
-    case 'arrived_jamaica':
-      return 'Arrived at destination';
+    case 'arrived_destination':
+     return destination ? `Arrived (${destination})` : 'Arrived (destination)';
       case 'collected_by_customer':
       return 'Collected by customer';
     case 'out_for_delivery':
@@ -132,7 +132,7 @@ export function statusBadgeColor(status: ShipmentStatus): MantineColor {
       return 'green';
     case 'out_for_delivery':
       return 'teal';
-    case 'arrived_jamaica':
+    case 'arrived_destination':
       return 'cyan';
        case 'collected_by_customer':
       return 'green';

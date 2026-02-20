@@ -30,13 +30,17 @@ const DTF = (() => {
   }
 })();
 
-function statusLabel(s: string) {
+function statusLabel(s: string, destination?: string | null) {
+
+  if (s === 'arrived_destination') {
+  return destination ? `Arrived (${destination})` : 'Arrived (destination)';
+}
   switch (String(s)) {
     case 'received': return 'Received (UK depot)';
     case 'collected': return 'Collected (UK)';
     case 'loaded': return 'Loaded';
     case 'departed_uk': return 'Departed UK';
-    case 'arrived_jamaica': return 'Arrived at destination';
+    case 'arrived_destination': return 'Arrived at destination';
     case 'collected_by_customer': return 'Collected by customer';
     case 'out_for_delivery': return 'Out for delivery';
     case 'delivered': return 'Delivered';
@@ -122,7 +126,7 @@ const supportWa = supportPhone ? waLink(supportPhone) : null;
               </Stack>
 
               <Badge variant="light" size="lg">
-                {statusLabel(s?.current_status)}
+                {}
               </Badge>
             </Group>
 
@@ -153,7 +157,7 @@ const supportWa = supportPhone ? waLink(supportPhone) : null;
             {data.events?.length ? (
               <Timeline bulletSize={18} lineWidth={2} active={activeIndex}>
                 {data.events.map((e, idx) => (
-                  <Timeline.Item key={idx} title={statusLabel(e.status)}>
+                 <Timeline.Item key={idx} title={statusLabel(e.status, s?.destination)} >
                     <Text size="sm" c="dimmed">
                       {formatWhen(e.occurred_at)}
                     </Text>

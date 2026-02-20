@@ -14,7 +14,7 @@ defaults as (
     ('received'::public.shipment_status,         'Hi {{name}}, we received your shipment {{code}} at our UK depot.'),
     ('loaded'::public.shipment_status,           'Update: shipment {{code}} has been loaded and is preparing to depart.'),
     ('departed_uk'::public.shipment_status,      'Update: shipment {{code}} has departed the UK.'),
-    ('arrived_jamaica'::public.shipment_status,  'Update: shipment {{code}} has arrived in Jamaica.'),
+    ('arrived_destination'::public.shipment_status,  'Update: shipment {{code}} has arrived in Jamaica.'),
     ('out_for_delivery'::public.shipment_status, 'Update: shipment {{code}} is out for delivery.'),
     ('delivered'::public.shipment_status,        'Delivered: shipment {{code}} has been delivered. Thank you.')
   ) as v(status, body)
