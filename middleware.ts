@@ -1,8 +1,56 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 
+function isWebhookRoute(pathname: string) {
+  return pathname.startsWith('/api/webhooks');
+}
+
+function isAuthPage(pathname: string) {
+  return pathname === '/login' || pathname === '/signup' || pathname.startsWith('/auth');
+}
+
+function isAppRoute(pathname: string) {
+  return (
+    pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/field') ||
+    pathname.startsWith('/agent') ||
+    pathname.startsWith('/shipments') ||
+    pathname.startsWith('/customers') ||
+    pathname.startsWith('/messages') ||
+    pathname.startsWith('/pod') ||
+    pathname.startsWith('/settings')
+  );
+}
+
+function isProtectedApi(pathname: string) {
+  return (
+    pathname.startsWith('/api/agent') ||
+    pathname.startsWith('/api/field') ||
+    pathname.startsWith('/api/pod') ||
+    pathname.startsWith('/api/shipments') ||
+    pathname.startsWith('/api/messages') ||
+    pathname.startsWith('/api/onboarding') ||
+    pathname.startsWith('/api/agents') ||
+    pathname.startsWith('/api/destinations')
+  );
+}
+
+function agentAllowedApi(pathname: string) {
+  return (
+    pathname.startsWith('/api/agent') ||
+    pathname.startsWith('/api/pod') ||
+    pathname.startsWith('/api/webhooks')
+  );
+}
+
 export async function middleware(request: NextRequest) {
-  const response = NextResponse.next({ request });
+  const pathname = request.nextUrl.pathname;
+NextResponse.next
+  // Keep webhooks public
+  if (isWebhookRoute(pathname)) return NextResponse.next();
+
+  // Collect cookies that Supabase wants to set during this request
+  const cookiesToSet: Array<{ name: string; value: string; options?: any }> = [];
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,151 +60,56 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set(name, value, options);
-          });
+        setAll(list) {
+          list.forEach((c) => cookiesToSet.push(c));
         },
       },
     }
   );
 
+  const applyCookies = (res: NextResponse) => {
+    for (const c of cookiesToSet) res.cookies.set(c.name, c.value, c.options);
+    return res;
+  };
+
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const pathname = request.nextUrl.pathname;
+  const needsAuth = isAppRoute(pathname) || isProtectedApi(pathname);
 
-const isAppRoute =
-  pathname.startsWith('/dashboard') ||
-  pathname.startsWith('/field') ||
-  pathname.startsWith('/agent') ||
-  pathname.startsWith('/shipments') ||
-  pathname.startsWith('/customers') ||
-  pathname.startsWith('/messages') ||
-  pathname.startsWith('/pod') ||
-  pathname.startsWith('/settings');
-
-  if (isAppRoute && !user) {
+  // Auth gate
+  if (needsAuth && !user) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     url.searchParams.set('next', pathname);
-    return NextResponse.redirect(url);
+    return applyCookies(NextResponse.redirect(url));
   }
 
-  // ---- RBAC (agent/field/office) ----
-  // Keep Twilio webhooks public
-  const isWebhookRoute = pathname.startsWith('/api/webhooks');
-  if (isWebhookRoute) return response;
-
-  // Protect these API routes too (optional but recommended)
-  const isProtectedApi =
-    pathname.startsWith('/api/agent') ||
-    pathname.startsWith('/api/field');
-
-  const needsRoleCheck = isAppRoute || isProtectedApi;
-
-  if (needsRoleCheck && user) {
-    // Fetch membership + role
-    const { data: member, error: memberErr } = await supabase
-      .from('org_members')
-      .select('org_id, role')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    // If we can't read membership for any reason, fail closed for protected API,
-    // fail open for UI (to avoid locking out during migrations), but you can tighten later.
-    const role = (member?.role ?? 'admin') as 'admin' | 'staff' | 'field' | 'agent';
-
-    const isOfficePage =
-      pathname.startsWith('/dashboard') ||
-      pathname.startsWith('/shipments') ||
-      pathname.startsWith('/customers') ||
-      pathname.startsWith('/messages') ||
-      pathname.startsWith('/pod') ||
-      pathname.startsWith('/settings');
-
-    const isFieldPage = pathname.startsWith('/field');
-    const isAgentPage = pathname.startsWith('/agent');
-
-    const isOfficeApi =
-      pathname.startsWith('/api/shipments') ||
-      pathname.startsWith('/api/messages') ||
-      pathname.startsWith('/api/pod') ||
-      pathname.startsWith('/api/onboarding');
-
-    const isFieldApi = pathname.startsWith('/api/field');
-    const isAgentApi = pathname.startsWith('/api/agent');
-
-    const allowOffice = role === 'admin' || role === 'staff';
-    const allowField = role === 'admin' || role === 'staff' || role === 'field';
-    const allowAgent = role === 'admin' || role === 'staff' || role === 'agent';
-
-    // API: return 403 JSON (no redirects)
-    if (pathname.startsWith('/api')) {
-      // keep webhooks public (handled above)
-      if (isAgentApi && !allowAgent) {
-        return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-      }
-      if (isFieldApi && !allowField) {
-        return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-      }
-
-      // Optional: tighten these later if you want role gating on office APIs too
-      if (isOfficeApi && !allowOffice) {
-        return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-      }
-    } else {
-      // Pages: redirect to the correct home for that role
-      if (isAgentPage && !allowAgent) {
-        const url = request.nextUrl.clone();
-        url.pathname = allowField ? '/field' : '/dashboard';
-        return NextResponse.redirect(url);
-      }
-
-      if (isFieldPage && !allowField) {
-        const url = request.nextUrl.clone();
-        url.pathname = allowAgent ? '/agent' : '/dashboard';
-        return NextResponse.redirect(url);
-      }
-
-      if (isOfficePage && !allowOffice) {
-        const url = request.nextUrl.clone();
-        url.pathname = allowAgent ? '/agent' : '/field';
-        return NextResponse.redirect(url);
-      }
-    }
-  }
-  // ---- end RBAC ----
-
-
-  const isAuthPage = pathname === '/login' || pathname === '/signup';
-
-  // If already signed in, don't let user sit on login/signup
-if (isAuthPage && user) {
-  const { data: member, error: memberErr } = await supabase
-    .from('org_members')
-    .select('role')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle();
-
-  if (memberErr || !member) {
+  // Signed-in users shouldn't sit on login/signup
+  if (user && (pathname === '/login' || pathname === '/signup')) {
     const url = request.nextUrl.clone();
-    url.pathname = '/login';
-    return NextResponse.redirect(url);
+    url.pathname = '/dashboard';
+    return applyCookies(NextResponse.redirect(url));
   }
 
-  const role = (member.role ?? 'staff') as 'admin' | 'staff' | 'field' | 'agent';
+  // Let auth pages + public content through
+  if (!user || !needsAuth || isAuthPage(pathname)) {
+    return applyCookies(NextResponse.next({ request }));
+  }
 
-  const url = request.nextUrl.clone();
-  url.pathname = role === 'agent' ? '/agent' : role === 'field' ? '/field' : '/dashboard';
-  return NextResponse.redirect(url);
-}
+  // ---------- CENTRAL API BLOCK: agent mode blocks everything except agent/pod/webhooks ----------
+  const isAgentMode = request.cookies.get('cp_mode')?.value === 'agent';
 
-  return response;
+  if (isAgentMode && pathname.startsWith('/api')) {
+    if (!agentAllowedApi(pathname)) {
+      return applyCookies(NextResponse.json({ error: 'forbidden' }, { status: 403 }));
+    }
+    return applyCookies(NextResponse.next({ request }));
+  }
+
+  // Otherwise, allow (pages are already blocked by your per-page layout guards in (app))
+  return applyCookies(NextResponse.next({ request }));
 }
 
 export const config = {

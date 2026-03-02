@@ -1,9 +1,10 @@
 'use client';
 
-import { Button, Checkbox, Paper, Select, Stack, Text, TextInput, Textarea } from '@mantine/core';
+import { Anchor, Badge, Button, Group, Paper, Select, Stack, Text, TextInput, Textarea } from '@mantine/core';
+import { IconBrandWhatsapp } from '@tabler/icons-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { ShipmentStatus, TemplateRow } from '../shipment-types';
-import { statusLabel } from '../shipment-types';
+import { statusLabel, statusOrder } from '../shipment-types';
 
 function renderTemplate(body: string, vars: Record<string, string>) {
   return String(body ?? '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
@@ -22,6 +23,7 @@ export function StatusUpdateCard({
   publicTrackingToken,
   onSave,
   saving,
+  stickyPrimaryAction,
 }: {
   currentStatus: ShipmentStatus;
   eventStatus: ShipmentStatus;
@@ -35,6 +37,7 @@ export function StatusUpdateCard({
   publicTrackingToken?: string | null;
   onSave: (opts: { sendUpdate: boolean; templateId: string | null }) => void;
   saving: boolean;
+  stickyPrimaryAction?: boolean;
 }) {
   const isDelivered = currentStatus === 'delivered';
 
@@ -44,10 +47,9 @@ export function StatusUpdateCard({
     [enabledTemplates, eventStatus]
   );
 
-  const [sendUpdate, setSendUpdate] = useState(true);
   const [templateId, setTemplateId] = useState<string | null>(null);
 
-  // Keep template selection aligned with status
+  // Auto-select best template when status changes
   useEffect(() => {
     const list = matchingTemplates.length ? matchingTemplates : enabledTemplates;
     setTemplateId(list[0]?.id ?? null);
@@ -65,7 +67,6 @@ export function StatusUpdateCard({
   }, [publicTrackingToken]);
 
   const preview = useMemo(() => {
-    if (!sendUpdate) return '';
     if (!selectedTemplate?.body) return '';
     return renderTemplate(selectedTemplate.body, {
       customer_name: customerName ?? '',
@@ -74,37 +75,76 @@ export function StatusUpdateCard({
       status: String(eventStatus ?? ''),
       note: eventNote ?? '',
       tracking_url: trackingUrl,
-
-      // backwards compat
       name: customerName ?? '',
       code: trackingCode ?? '',
     });
-  }, [customerName, destination, eventNote, eventStatus, selectedTemplate?.body, sendUpdate, trackingCode, trackingUrl]);
+  }, [customerName, destination, eventNote, eventStatus, selectedTemplate?.body, trackingCode, trackingUrl]);
+
+  const hasTemplate = Boolean(templateId);
+  const templateList = matchingTemplates.length ? matchingTemplates : enabledTemplates;
+  const noTemplatesAvailable = templateList.length === 0;
+
+  // Only offer statuses that are forward-moving (or same) from current
+  const currentIdx = statusOrder.indexOf(currentStatus);
+  const statusOptions = [
+    { value: 'collected', label: statusLabel('collected') },
+    { value: 'received', label: statusLabel('received') },
+    { value: 'loaded', label: statusLabel('loaded') },
+    { value: 'departed_uk', label: statusLabel('departed_uk') },
+    { value: 'arrived_destination', label: statusLabel('arrived_destination') },
+    { value: 'collected_by_customer', label: statusLabel('collected_by_customer') },
+    { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
+  ].map((opt) => {
+    const optIdx = statusOrder.indexOf(opt.value as ShipmentStatus);
+    return { ...opt, disabled: optIdx < currentIdx };
+  });
+
+  const actions = (
+    <Group gap="xs" align="center">
+      <Button
+        leftSection={<IconBrandWhatsapp size={16} />}
+        onClick={() => onSave({ sendUpdate: true, templateId })}
+        loading={saving}
+        disabled={isDelivered || !hasTemplate}
+        flex={1}
+      >
+        Update &amp; Notify
+      </Button>
+
+      <Anchor
+        component="button"
+        size="sm"
+        c="dimmed"
+        onClick={() => onSave({ sendUpdate: false, templateId: null })}
+        style={{ whiteSpace: 'nowrap', opacity: saving ? 0.5 : 1 }}
+        aria-disabled={saving || isDelivered}
+      >
+        Save only
+      </Anchor>
+    </Group>
+  );
 
   return (
     <Paper withBorder p="sm" radius="md">
       <Stack gap="xs">
-        <Text fw={700}>Add status update</Text>
+        <Group justify="space-between" align="center">
+          <Text fw={700}>Status update</Text>
+          {!isDelivered && noTemplatesAvailable && (
+            <Badge color="orange" variant="light" size="sm">No templates — save only</Badge>
+          )}
+        </Group>
 
         {isDelivered ? (
           <Text size="sm" c="dimmed">
-            Delivered — status is locked. (Use “Replace POD” if you need to update the photo.)
+            Delivered — status is locked. Use &ldquo;Replace POD&rdquo; to update the photo.
           </Text>
         ) : null}
 
         <Select
-          label="Status"
-          data={[
-            { value: 'collected', label: statusLabel('collected') },
-            { value: 'received', label: statusLabel('received') },
-            { value: 'loaded', label: statusLabel('loaded') },
-            { value: 'departed_uk', label: statusLabel('departed_uk') },
-            { value: 'arrived_destination', label: statusLabel('arrived_destination') },
-            { value: 'collected_by_customer', label: statusLabel('collected_by_customer') },
-            { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
-          ]}
+          label="New status"
+          data={statusOptions}
           value={eventStatus}
-          onChange={(v) => setEventStatus((v ?? 'received') as ShipmentStatus)}
+          onChange={(v) => setEventStatus((v ?? currentStatus) as ShipmentStatus)}
           disabled={isDelivered}
         />
 
@@ -116,48 +156,52 @@ export function StatusUpdateCard({
           disabled={isDelivered}
         />
 
-        <Checkbox
-          label="Send update to customer"
-          checked={sendUpdate}
-          onChange={(e) => setSendUpdate(e.currentTarget.checked)}
-          disabled={isDelivered}
-        />
-
-        {sendUpdate ? (
+        {!noTemplatesAvailable && !isDelivered && (
           <>
             <Select
-              label="Message template"
-              data={(matchingTemplates.length ? matchingTemplates : enabledTemplates).map((t) => ({
+              label="Template"
+              data={templateList.map((t) => ({
                 value: t.id,
-                label: t.name ? `${t.name}` : `${statusLabel(t.status)}`,
+                label: t.name ?? statusLabel(t.status),
               }))}
               value={templateId}
               onChange={(v) => setTemplateId(v ?? null)}
-              disabled={isDelivered || !(matchingTemplates.length ? matchingTemplates : enabledTemplates).length}
-              placeholder="No templates available"
             />
 
-            <Textarea
-              label="Preview"
-              value={preview}
-              readOnly
-              autosize
-              minRows={3}
-              disabled={isDelivered}
-            />
+            {preview && (
+              <Textarea
+                label="Message preview"
+                value={preview}
+                readOnly
+                autosize
+                minRows={2}
+                styles={{ input: { fontSize: 'var(--mantine-font-size-sm)', color: 'var(--mantine-color-dimmed)' } }}
+              />
+            )}
+
             <Text size="xs" c="dimmed">
-              If WhatsApp isn’t configured, this will be logged instead (so you can still demo).
+              WhatsApp sends if configured — otherwise logged for demo/testing.
             </Text>
           </>
-        ) : null}
+        )}
 
-        <Button
-          onClick={() => onSave({ sendUpdate, templateId })}
-          loading={saving}
-          disabled={isDelivered || (sendUpdate && !templateId)}
-        >
-          {sendUpdate ? 'Save status & send' : 'Save status'}
-        </Button>
+        {stickyPrimaryAction ? (
+          <div
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              background: 'var(--mantine-color-body)',
+              paddingTop: 8,
+              paddingBottom: 8,
+              zIndex: 5,
+              borderTop: '1px solid var(--mantine-color-gray-2)',
+            }}
+          >
+            {actions}
+          </div>
+        ) : (
+          actions
+        )}
       </Stack>
     </Paper>
   );

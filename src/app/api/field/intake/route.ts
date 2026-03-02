@@ -4,6 +4,7 @@ import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
 import { renderTemplate } from '@/lib/messaging/render-template';
+import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 
 
 function extFor(contentType: string) {
@@ -56,6 +57,8 @@ function pick<T>(...vals: T[]) {
 }
 
 export async function POST(req: Request) {
+    const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
   const supabase = await createSupabaseServerClient();
 
   const {
@@ -75,6 +78,7 @@ export async function POST(req: Request) {
 
   const customerName = str(payload.customerName);
   const phone = str(payload.phone);
+  const phoneCountry = str((payload as any).phoneCountry || 'GB').toUpperCase() as any;
   const destination = str(payload.destination);
   const serviceType = str(payload.serviceType || 'depot') as 'depot' | 'door_to_door';
 
@@ -206,13 +210,15 @@ export async function POST(req: Request) {
       handling_notes: handlingNotes,
     };
   }
+const phoneE164 = normalizeE164Phone(phone, { defaultCountry: phoneCountry });
+if (!phoneE164) return NextResponse.json({ error: 'phone must be valid (E.164). Use country picker.' }, { status: 400 });
 
   // 1) Customer upsert by (org_id, phone)
   const { data: existingCustomer, error: custSelErr } = await supabase
     .from('customers')
     .select('id')
     .eq('org_id', orgId)
-    .eq('phone', phone)
+    .eq('phone', phoneE164)
     .maybeSingle();
 
   if (custSelErr) return NextResponse.json({ error: custSelErr.message }, { status: 400 });
@@ -380,7 +386,15 @@ export async function POST(req: Request) {
         })
         .select('id')
         .single();
-
+await supabase
+  .from('shipments')
+  .update({
+    last_outbound_message_at: new Date().toISOString(),
+    last_outbound_message_status: String(status ?? ''), 
+    last_outbound_send_status: initialSendStatus,
+    last_outbound_preview: String(rendered ?? '').slice(0, 140),
+  })
+  .eq('id', shipmentId);
       if (!logErr && shouldSend && logRow?.id) {
         try {
           const r = await twilioSendWhatsApp({ toE164: toE164!, body: rendered });
@@ -394,6 +408,11 @@ export async function POST(req: Request) {
               sent_at: new Date().toISOString(),
             })
             .eq('id', logRow.id);
+            
+            await supabase.from('shipments')
+  .update({ last_outbound_send_status: String(r.status ?? 'queued') })
+  .eq('id', shipmentId);
+
         } catch (e: any) {
           await supabase.from('message_logs').update({ send_status: 'failed', error: e?.message ?? 'Send failed' }).eq('id', logRow.id);
         }

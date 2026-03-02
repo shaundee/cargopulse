@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 
 export async function GET() {
+    const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
   const supabase = await createSupabaseServerClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -24,11 +27,11 @@ export async function POST(req: Request) {
 
   const input = await req.json().catch(() => null);
 
-  const status = String(input?.status ?? '').trim();
+  const templateStatus = String(input?.status ?? '').trim();
   const body = String(input?.body ?? '').trim();
   const enabled = input?.enabled === false ? false : true;
 
-  if (!status) return NextResponse.json({ error: 'status is required' }, { status: 400 });
+  if (!templateStatus) return NextResponse.json({ error: 'status is required' }, { status: 400 });
   if (!body) return NextResponse.json({ error: 'body is required' }, { status: 400 });
 
   // Get user's org_id (same pattern as other endpoints)
@@ -48,7 +51,7 @@ export async function POST(req: Request) {
   const { data, error } = await supabase
     .from('message_templates')
     .upsert(
-      { org_id: orgId, status, body, enabled },
+      { org_id: orgId, status: templateStatus, body, enabled },
       { onConflict: 'org_id,status' }
     )
     .select('id, org_id, status, body, enabled, created_at')

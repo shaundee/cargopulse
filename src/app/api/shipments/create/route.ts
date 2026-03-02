@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { normalizeE164Phone } from '@/lib/whatsapp/twilio'; 
+import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 
 function makeTrackingCode() {
   // e.g. SHP-6H2K9Q (fast + human-friendly)
@@ -11,6 +13,8 @@ function makeTrackingCode() {
 }
 
 export async function POST(req: Request) {
+  const blocked = await blockIfAgentMode();
+if (blocked) return blocked;
   const supabase = await createSupabaseServerClient();
 
   const {
@@ -23,6 +27,7 @@ export async function POST(req: Request) {
 
   const customerName = String(body?.customerName ?? '').trim();
   const phone = String(body?.phone ?? '').trim();
+  const phoneCountry = String(body?.phoneCountry ?? 'GB').toUpperCase() as any;
   const destination = String(body?.destination ?? '').trim();
   const serviceType = (String(body?.serviceType ?? 'depot') === 'door_to_door') ? 'door_to_door' : 'depot';
   const initialChargePence = Math.max(0, Math.trunc(Number(body?.initial_charge_pence ?? 0)));
@@ -30,8 +35,10 @@ const depositPaidPence = Math.max(0, Math.trunc(Number(body?.deposit_paid_pence 
 
 
   if (customerName.length < 2) return NextResponse.json({ error: 'Customer name too short' }, { status: 400 });
-  if (phone.length < 6) return NextResponse.json({ error: 'Phone is required' }, { status: 400 });
-  if (destination.length < 2) return NextResponse.json({ error: 'Destination is required' }, { status: 400 });
+
+
+const phoneE164 = normalizeE164Phone(phone, { defaultCountry: phoneCountry });
+if (!phoneE164) return NextResponse.json({ error: 'Phone must be valid (E.164). Use country picker.' }, { status: 400 });
 
   // Get org_id (membership gate)
   const { data: membership, error: memErr } = await supabase
@@ -45,12 +52,22 @@ const depositPaidPence = Math.max(0, Math.trunc(Number(body?.deposit_paid_pence 
   if (!membership?.org_id) return NextResponse.json({ error: 'No organization membership' }, { status: 400 });
 
   const orgId = membership.org_id as string;
+  const { data: billing } = await supabase
+  .from('organization_billing')
+  .select('status')
+  .eq('org_id', orgId)
+  .maybeSingle();
+
+const billingStatus = String(billing?.status ?? 'inactive').toLowerCase();
+if (!['active', 'trialing'].includes(billingStatus)) {
+  return NextResponse.json({ error: 'subscription_required' }, { status: 402 });
+}
 
   // 1) Upsert customer by (org_id, phone)
   const { data: customer, error: custErr } = await supabase
     .from('customers')
     .upsert(
-      { org_id: orgId, phone, name: customerName },
+      { org_id: orgId, phone: phoneE164, phone_e164: phoneE164, country_code: phoneCountry, name: customerName },
       { onConflict: 'org_id,phone' }
     )
     .select('id')
@@ -131,4 +148,10 @@ if (ledgerRows.length) {
 
 
   return NextResponse.json({ ok: true, shipmentId: shipment.id, trackingCode: shipment.tracking_code });
+  
+}
+export async function GET() {
+  const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
+  return new Response('ok', { status: 200 });
 }

@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
 import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
+import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 
 function renderTemplate(body: string, vars: Record<string, string>) {
   return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
@@ -13,6 +14,8 @@ function isDelivered(status: unknown) {
 }
 
 export async function POST(req: Request) {
+  const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
   const supabase = await createSupabaseServerClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -21,14 +24,14 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
 
   const shipmentIds: string[] = Array.isArray(body?.shipmentIds) ? body.shipmentIds : [];
-  const status = String(body?.status ?? '').trim();
+ const newStatus = String(body?.status ?? '').trim();
   const note = body?.note == null ? null : String(body.note).trim();
   const autoLog = Boolean(body?.autoLog ?? false);
 
   if (!shipmentIds.length) return NextResponse.json({ error: 'shipmentIds is required' }, { status: 400 });
-  if (!status) return NextResponse.json({ error: 'status is required' }, { status: 400 });
+  if (!newStatus) return NextResponse.json({ error: 'status is required' }, { status: 400 });
 
-  if (isDelivered(status)) {
+  if (isDelivered(newStatus)) {
     return NextResponse.json({ error: 'Delivered is set via POD capture.' }, { status: 400 });
   }
 
@@ -69,7 +72,7 @@ export async function POST(req: Request) {
 
       const { error: rpcErr } = await supabase.rpc('add_shipment_event', {
         p_shipment_id: s.id,
-        p_status: status,
+        p_status: newStatus,
         p_note: note,
       });
 
@@ -88,7 +91,7 @@ export async function POST(req: Request) {
             .from('message_templates')
             .select('id, body, enabled, status')
             .eq('org_id', membership.org_id)
-            .eq('status', status)
+            .eq('status', newStatus)
             .eq('enabled', true)
             .limit(1)
             .maybeSingle();
@@ -103,7 +106,7 @@ export async function POST(req: Request) {
               customer_name: customerName,
               tracking_code: (s as any).tracking_code ?? '',
               destination: (s as any).destination ?? '',
-              status: String(status),
+              status: String(newStatus),
               note: note ?? '',
               tracking_url: trackingUrl,
 
@@ -127,7 +130,7 @@ export async function POST(req: Request) {
                 provider,
                 send_status: initialSendStatus,
                 body: rendered,
-                status: status,
+                status: newStatus,
                 sent_at: new Date().toISOString(),
                 error: null,
               })
@@ -167,4 +170,9 @@ export async function POST(req: Request) {
 
   revalidatePath('/shipments');
   return NextResponse.json({ ok: true, updated, skipped, results });
+}
+export async function GET() {
+  const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
+  return new Response('ok', { status: 200 });
 }

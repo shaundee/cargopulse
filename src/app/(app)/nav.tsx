@@ -13,7 +13,11 @@ import {
   IconSettings,
 } from '@tabler/icons-react';
 
-const items = [
+type Role = 'admin' | 'staff' | 'field' | 'agent';
+
+type NavItem = { href: string; label: string; icon: any };
+
+const ALL: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: IconLayoutDashboard },
   { href: '/agent', label: 'Agent', icon: IconPackage },
   { href: '/field', label: 'Field (Collections)', icon: IconTruckDelivery },
@@ -24,8 +28,15 @@ const items = [
   { href: '/settings', label: 'Settings', icon: IconSettings },
 ];
 
-export function AppNav() {
+function itemsForRole(role: Role) {
+  if (role === 'agent') return ALL.filter((i) => i.href === '/agent' || i.href === '/pod');
+  if (role === 'field') return ALL.filter((i) => i.href === '/field' || i.href === '/shipments' || i.href === '/pod');
+  return ALL; // admin/staff
+}
+
+export function AppNav({ role }: { role: Role }) {
   const pathname = usePathname();
+  const items = itemsForRole(role);
 
   return (
     <Stack gap={6}>

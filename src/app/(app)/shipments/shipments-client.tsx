@@ -1,9 +1,10 @@
 'use client';
 
 import type { FormEvent } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  ActionIcon,
   Badge,
   Button,
   Checkbox,
@@ -13,10 +14,17 @@ import {
   Stack,
   Text,
   TextInput,
+  Tooltip,
 } from '@mantine/core';
+import { CopyButton } from '@mantine/core';
 import { DataTable } from 'mantine-datatable';
 import {
+  IconBrandWhatsapp,
+  IconCheck,
+  IconCopy,
   IconDownload,
+  IconLink,
+  IconPaperclip,
   IconPlus,
   IconPrinter,
   IconSearch,
@@ -29,6 +37,50 @@ import { formatWhen, statusBadgeColor, statusLabel } from './shipment-types';
 import { CreateShipmentDrawer } from './components/CreateShipmentDrawer';
 import { ShipmentDetailDrawer } from './components/ShipmentDetailDrawer';
 
+/** ---------- phone helpers ---------- */
+function digitsOnly(s: string) {
+  return String(s ?? '').replace(/\D/g, '');
+}
+
+function formatPhoneCompact(e164: string) {
+  const s = String(e164 ?? '').trim();
+  if (!s) return '-';
+
+  const m = s.match(/^\+(\d{1,3})/);
+  const cc = m ? `+${m[1]}` : s.startsWith('+') ? '+' : '';
+  const d = digitsOnly(s);
+  if (d.length <= 6) return s;
+
+  const last4 = d.slice(-4);
+  return `${cc} …${last4}`;
+}
+
+function waLinkFromE164(e164: string) {
+  const d = digitsOnly(e164);
+  return d ? `https://wa.me/${d}` : '';
+}
+
+function fmtTime(iso?: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ''
+    : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function lastMessageLabel(r: ShipmentRow) {
+  const s = String((r as any).last_outbound_message_status ?? '').trim();
+  if (!s) return '-';
+
+  const pretty =
+    s === 'tracking_link' ? 'Tracking link' :
+    s === 'nudge' ? 'Nudge' :
+    s;
+
+  const when = fmtTime((r as any).last_outbound_message_at);
+  return when ? `${pretty} sent ${when}` : `${pretty}`;
+}
+
 export default function ShipmentsClient({
   initialShipments,
 }: {
@@ -40,19 +92,20 @@ export default function ShipmentsClient({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [listRefreshKey, setListRefreshKey] = useState(0);
+
   const [form, _setForm] = useState<NewShipmentForm>({
     customerName: '',
     phone: '',
     destination: '',
     serviceType: 'depot',
+    phoneCountry: 'GB',
   });
 
   const setForm = (updater: (prev: NewShipmentForm) => NewShipmentForm) => _setForm(updater);
 
-  // Search
+  // Search + Filters
   const [query, setQuery] = useState('');
-
-  // Filters (Segment 3)
   const [statusFilter, setStatusFilter] = useState<ShipmentStatus | 'all'>('all');
   const [destinationFilter, setDestinationFilter] = useState<string>('all');
   const [serviceFilter, setServiceFilter] = useState<'all' | 'depot' | 'door_to_door'>('all');
@@ -67,54 +120,63 @@ export default function ShipmentsClient({
   // Detail drawer
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailShipmentId, setDetailShipmentId] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<'logistics' | 'cargo' | 'proof'>('logistics');
 
-  useEffect(() => {
-    setSelectedRecords([]);
-  }, [initialShipments]);
+  const [destinationOptions, setDestinationOptions] = useState<string[]>(['all']);
 
-  const destinationOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const s of initialShipments) {
-      const d = String(s.destination ?? '').trim();
-      if (d) set.add(d);
-    }
-    return ['all', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
-  }, [initialShipments]);
+  const [records, setRecords] = useState<ShipmentRow[]>(initialShipments);
+  const [loadingList, setLoadingList] = useState(false);
 
-  const records = useMemo(() => {
-    let list = initialShipments;
+  const showFullPhone = query.trim().length > 0; // key UX: show full number while searching
 
-    // Search
-    const q = query.toLowerCase().trim();
-    if (q) {
-      list = list.filter((r) => {
-        return (
-          r.tracking_code.toLowerCase().includes(q) ||
-          (r.customers?.name ?? '').toLowerCase().includes(q) ||
-          (r.customers?.phone ?? '').toLowerCase().includes(q) ||
-          (r.destination ?? '').toLowerCase().includes(q)
-        );
-      });
-    }
-
-    // Filters
-    if (statusFilter !== 'all') {
-      list = list.filter((r) => r.current_status === statusFilter);
-    }
-    if (destinationFilter !== 'all') {
-      list = list.filter((r) => String(r.destination ?? '') === destinationFilter);
-    }
-    if (serviceFilter !== 'all') {
-      list = list.filter((r) => String((r as any).service_type ?? '') === serviceFilter);
-    }
-
-    return list;
-  }, [initialShipments, query, statusFilter, destinationFilter, serviceFilter]);
-
-  function openShipmentDetail(shipmentId: string) {
+  function openShipmentDetail(shipmentId: string, tab: 'logistics' | 'cargo' | 'proof' = 'logistics') {
     setDetailShipmentId(shipmentId);
+    setDetailTab(tab);
     setDetailOpen(true);
   }
+
+  // Fetch destinations
+  useEffect(() => {
+    fetch('/api/destinations')
+      .then((r) => r.json())
+      .then((j) => {
+        const names = (j.destinations ?? []).map((d: any) => String(d.name));
+        setDestinationOptions(['all', ...names]);
+      })
+      .catch(() => setDestinationOptions(['all']));
+  }, []);
+
+  // Fetch list (debounced)
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      setLoadingList(true);
+      try {
+        const sp = new URLSearchParams();
+        if (query.trim()) sp.set('q', query.trim());
+        sp.set('status', statusFilter);
+        sp.set('destination', destinationFilter);
+        sp.set('service', serviceFilter);
+        sp.set('limit', '200');
+
+        const res = await fetch(`/api/shipments/list?${sp.toString()}`, { cache: 'no-store' });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(json?.error ?? 'List fetch failed');
+
+        setRecords((json.shipments ?? []) as ShipmentRow[]);
+        setSelectedRecords([]); // clear selection on refresh to avoid mismatched rows
+      } catch (e: any) {
+        notifications.show({
+          title: 'List error',
+          message: e?.message ?? 'Failed to load',
+          color: 'red',
+        });
+      } finally {
+        setLoadingList(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(t);
+  }, [query, statusFilter, destinationFilter, serviceFilter, listRefreshKey]);
 
   function csvEscape(v: unknown) {
     const s = String(v ?? '');
@@ -122,7 +184,6 @@ export default function ShipmentsClient({
   }
 
   function downloadShipmentsCsv() {
-    // ✅ Export selected if any, otherwise export what the table is showing (filtered records)
     const exportRows = selectedRecords.length ? selectedRecords : records;
 
     const header = [
@@ -140,7 +201,7 @@ export default function ShipmentsClient({
       [
         csvEscape(r.tracking_code),
         csvEscape(r.customers?.name ?? ''),
-        csvEscape(r.customers?.phone ?? ''),
+        csvEscape((r.customers as any)?.phone_e164 ?? r.customers?.phone ?? ''),
         csvEscape(r.destination ?? ''),
         csvEscape((r as any).service_type ?? ''),
         csvEscape(r.current_status),
@@ -181,6 +242,7 @@ export default function ShipmentsClient({
           phone: form.phone,
           destination: form.destination,
           serviceType: form.serviceType,
+          phoneCountry: form.phoneCountry,
         }),
       });
 
@@ -214,12 +276,15 @@ export default function ShipmentsClient({
         color: 'green',
       });
 
+      setListRefreshKey((k) => k + 1);
       setDrawerOpen(false);
+
       setForm(() => ({
         customerName: '',
         phone: '',
         destination: '',
         serviceType: 'depot',
+        phoneCountry: form.phoneCountry,
       }));
 
       router.refresh();
@@ -268,6 +333,7 @@ export default function ShipmentsClient({
 
       setSelectedRecords([]);
       setBulkNote('');
+      setListRefreshKey((k) => k + 1);
       router.refresh();
     } catch (e: any) {
       notifications.show({
@@ -284,9 +350,7 @@ export default function ShipmentsClient({
     <Stack gap="md">
       <Group justify="space-between">
         <Stack gap={2}>
-          <Text fw={700} size="lg">
-            Shipments
-          </Text>
+          <Text fw={700} size="lg">Shipments</Text>
           <Text c="dimmed" size="sm">
             Track shipments, send updates, and reduce “where is it?” calls.
           </Text>
@@ -362,11 +426,7 @@ export default function ShipmentsClient({
             </Button>
           </Group>
 
-          <Button
-            variant="light"
-            leftSection={<IconDownload size={16} />}
-            onClick={downloadShipmentsCsv}
-          >
+          <Button variant="light" leftSection={<IconDownload size={16} />} onClick={downloadShipmentsCsv}>
             Export CSV
           </Button>
         </Group>
@@ -424,9 +484,10 @@ export default function ShipmentsClient({
           highlightOnHover
           records={records}
           idAccessor="id"
+          fetching={loadingList}
           selectedRecords={selectedRecords}
           onSelectedRecordsChange={setSelectedRecords}
-          onRowClick={({ record }) => openShipmentDetail(record.id)}
+          onRowClick={({ record }) => openShipmentDetail(record.id, 'logistics')}
           columns={[
             { accessor: 'tracking_code', title: 'Tracking' },
             {
@@ -434,17 +495,89 @@ export default function ShipmentsClient({
               title: 'Customer',
               render: (r) => r.customers?.name ?? '-',
             },
+
+            // ✅ Phone column: compact normally, full while searching + copy + WhatsApp
             {
-              accessor: 'customers.phone',
+              accessor: 'phone',
               title: 'Phone',
-              render: (r) => r.customers?.phone ?? '-',
+              width: showFullPhone ? 260 : 170,
+              render: (r) => {
+                const phone = String(
+                  (r.customers as any)?.phone_e164 ??
+                    r.customers?.phone ??
+                    (r as any).phone_e164 ??
+                    (r as any).phone ??
+                    ''
+                ).trim();
+
+                const display = showFullPhone ? (phone || '-') : formatPhoneCompact(phone);
+                const waHref = phone ? waLinkFromE164(phone) : '';
+
+                if (!phone) return <Text size="sm">-</Text>;
+
+                return (
+                  <Group gap={6} wrap="nowrap">
+                    <CopyButton value={phone} timeout={1200}>
+                      {({ copied, copy }) => (
+                        <Tooltip
+                          withArrow
+                          label={copied ? 'Copied' : phone}
+                        >
+                          <Group gap={6} wrap="nowrap">
+                            <Text
+                              size="sm"
+                              ff="monospace"
+                              style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                copy();
+                              }}
+                            >
+                              {display}
+                            </Text>
+
+                            <ActionIcon
+                              variant="subtle"
+                              aria-label="Copy phone"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                copy();
+                              }}
+                            >
+                              {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                            </ActionIcon>
+                          </Group>
+                        </Tooltip>
+                      )}
+                    </CopyButton>
+
+                    <Tooltip label="WhatsApp" withArrow>
+                      <ActionIcon
+                        variant="subtle"
+                        component="a"
+                        href={waHref || undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label="Open WhatsApp"
+                        onClick={(e) => e.stopPropagation()}
+                        disabled={!waHref}
+                      >
+                        <IconBrandWhatsapp size={16} />
+                      </ActionIcon>
+                    </Tooltip>
+                  </Group>
+                );
+              },
             },
+
             { accessor: 'destination', title: 'Destination' },
+
             {
               accessor: 'service_type',
               title: 'Service',
               render: (r) => (r as any).service_type ?? '-',
             },
+
             {
               accessor: 'current_status',
               title: 'Status',
@@ -454,29 +587,123 @@ export default function ShipmentsClient({
                 </Badge>
               ),
             },
+
             {
               accessor: 'last_event_at',
               title: 'Updated',
               render: (r) => formatWhen(r.last_event_at),
             },
+
+            // ✅ Paperclip proof icon: opens proof tab
+            {
+              accessor: 'proof',
+              title: '',
+              width: 44,
+              render: (r) => {
+                const hasPod = Boolean((r as any).has_pod);
+                const hasPickup = Boolean((r as any).has_pickup_assets);
+                if (!hasPod && !hasPickup) return null;
+
+                const label = hasPod ? 'POD attached' : 'Pickup proof attached';
+                return (
+                  <Tooltip label={label} withArrow>
+                    <ActionIcon
+                      variant="subtle"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openShipmentDetail(r.id, 'proof');
+                      }}
+                      aria-label={label}
+                    >
+                      <IconPaperclip size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                );
+              },
+            },
+
+            // ✅ Last message column
+            {
+              accessor: 'last_message',
+              title: 'Last message',
+              width: 210,
+              render: (r) => {
+                const failed = String((r as any).last_outbound_send_status ?? '') === 'failed';
+                const preview = String((r as any).last_outbound_preview ?? '').trim();
+
+                const label = (
+                  <Text size="sm" c={failed ? 'red' : undefined}>
+                    {lastMessageLabel(r)}
+                  </Text>
+                );
+
+                return preview ? (
+                  <Tooltip label={preview} multiline w={280} withArrow>
+                    {label}
+                  </Tooltip>
+                ) : (
+                  label
+                );
+              },
+            },
+
+            // ✅ Actions
             {
               accessor: 'actions',
               title: '',
-              width: 90,
+              width: 120,
               render: (r) => (
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  leftSection={<IconPrinter size={14} />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                  const url = new URL(`/shipments/print/${encodeURIComponent(r.id)}`, window.location.origin).toString();
-window.open(url, '_blank', 'noopener,noreferrer');
+                <Group gap="xs" justify="flex-end" wrap="nowrap">
+                  <Tooltip label="Send tracking link" withArrow>
+                    <ActionIcon
+                      variant="light"
+                      aria-label="Send tracking link"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const res = await fetch('/api/messages/misc/send', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ shipmentId: r.id, key: 'tracking_link' }),
+                        });
+                        const json = await res.json().catch(() => null);
+                        if (!res.ok) {
+                          notifications.show({
+                            title: 'Send failed',
+                            message: json?.error ?? 'Failed',
+                            color: 'red',
+                          });
+                          return;
+                        }
+                        notifications.show({
+                          title: 'Sent',
+                          message: 'Tracking link sent/logged',
+                          color: 'green',
+                        });
+                        setListRefreshKey((k) => k + 1);
+                      }}
+                    >
+                      <IconLink size={16} />
+                    </ActionIcon>
+                  </Tooltip>
 
-                  }}
-                >
-                  Print
-                </Button>
+                  <Tooltip label="Print" withArrow>
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      leftSection={<IconPrinter size={14} />}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const url = new URL(
+                          `/shipments/print/${encodeURIComponent(r.id)}`,
+                          window.location.origin
+                        ).toString();
+                        window.open(url, '_blank', 'noopener,noreferrer');
+                      }}
+                    >
+                      Print
+                    </Button>
+                  </Tooltip>
+                </Group>
               ),
             },
           ]}
@@ -499,7 +726,11 @@ window.open(url, '_blank', 'noopener,noreferrer');
           setDetailOpen(false);
           setDetailShipmentId(null);
         }}
-        onReloadRequested={() => router.refresh()}
+        onReloadRequested={() => {
+          setListRefreshKey((k) => k + 1);
+          router.refresh();
+        }}
+        initialTab={detailTab}
       />
     </Stack>
   );

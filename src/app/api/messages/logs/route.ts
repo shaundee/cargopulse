@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 
 export async function GET(req: Request) {
+    const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
   const supabase = await createSupabaseServerClient();
 
   const { data: { user } } = await supabase.auth.getUser();

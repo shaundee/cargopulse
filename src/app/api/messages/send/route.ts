@@ -2,12 +2,15 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
 import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
+import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 
 function renderTemplate(body: string, vars: Record<string, string>) {
   return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
 }
 
 export async function POST(req: Request) {
+    const blocked = await blockIfAgentMode();
+    if (blocked) return blocked;
   const supabase = await createSupabaseServerClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -95,7 +98,15 @@ const rendered = renderTemplate(String(tpl.body ?? ''), {
     })
     .select('id')
     .single();
-
+await supabase
+  .from('shipments')
+  .update({
+    last_outbound_message_at: new Date().toISOString(),
+    last_outbound_message_status: String(status ?? ''), // OR tpl.status in /messages/send
+    last_outbound_send_status: initialSendStatus,
+    last_outbound_preview: String(rendered ?? '').slice(0, 140),
+  })
+  .eq('id', shipment.id);
    // Delivered dedupe: treat 23505 as a safe "already done" and DO NOT send.
   if (logErr && (logErr as any).code === '23505') {
     return NextResponse.json({ ok: true, skipped: true, reason: 'duplicate_delivered' });
@@ -119,6 +130,11 @@ const rendered = renderTemplate(String(tpl.body ?? ''), {
       })
       .eq('id', log.id);
 
+      await supabase
+  .from('shipments')
+  .update({ last_outbound_send_status: String(result.status ?? 'queued') })
+  .eq('id', shipment.id);
+
     return NextResponse.json({ ok: true, rendered, log_id: log.id, mode: 'sent', sid: result.sid, status: result.status });
   } catch (e: any) {
     await supabase
@@ -128,7 +144,15 @@ const rendered = renderTemplate(String(tpl.body ?? ''), {
         error: e?.message ?? 'Send failed',
       })
       .eq('id', log.id);
-
+await supabase
+  .from('shipments')
+  .update({ last_outbound_send_status: 'failed' })
+  .eq('id', shipment.id);
     return NextResponse.json({ ok: false, error: e?.message ?? 'Send failed', log_id: log.id }, { status: 400 });
   }
+}
+export async function GET() {
+  const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
+  return new Response('ok', { status: 200 });
 }

@@ -12,23 +12,23 @@ export async function POST(req: Request) {
   const params = new URLSearchParams(raw);
 
   const sid = params.get('MessageSid') ?? '';
-  const status = String(params.get('MessageStatus') ?? '').toLowerCase();
+ const messageStatus = String(params.get('MessageStatus') ?? '').toLowerCase();
   const errorCode = params.get('ErrorCode');
   const errorMessage = params.get('ErrorMessage');
 
-  if (!sid || !status) return NextResponse.json({ ok: true });
+  if (!sid || !messageStatus) return NextResponse.json({ ok: true });
 
   const supabase = createSupabaseAdminClient();
 
-  const patch: Record<string, any> = { send_status: status };
+  const patch: Record<string, any> = { send_status: messageStatus };
 
-  if (status === 'failed' || status === 'undelivered') {
+  if (messageStatus === 'failed' || messageStatus === 'undelivered') {
     patch.error = [errorCode, errorMessage].filter(Boolean).join(' ') || 'Delivery failed';
   } else {
     patch.error = null;
   }
 
-  if (status === 'sent' || status === 'delivered') {
+  if (messageStatus === 'sent' || messageStatus === 'delivered') {
     patch.sent_at = new Date().toISOString();
   }
 

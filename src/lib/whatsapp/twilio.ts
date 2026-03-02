@@ -8,17 +8,53 @@ export function isTwilioConfigured() {
   );
 }
 
-export function normalizeE164Phone(input: string): string | null {
-  const raw = String(input ?? '').trim().replace(/\s+/g, '').replace(/-/g, '');
-  if (!raw) return null;
+export function normalizeE164Phone(
+  input: string,
+  opts?: { defaultCountry?: 'GB' | 'JM' | 'US' | 'CA' }
+): string | null {
+  const raw0 = String(input ?? '').trim();
+  if (!raw0) return null;
 
-  // Stored as "whatsapp:+447..." sometimes — strip prefix
-  const s = raw.startsWith('whatsapp:') ? raw.slice('whatsapp:'.length) : raw;
+  const raw = raw0
+    .replace(/\s+/g, '')
+    .replace(/-/g, '')
+    .replace(/\(/g, '')
+    .replace(/\)/g, '');
 
-  if (s.startsWith('+')) return s;
-  if (s.startsWith('00')) return `+${s.slice(2)}`;
+  const s0 = raw.startsWith('whatsapp:') ? raw.slice('whatsapp:'.length) : raw;
 
-  // MVP rule: require E.164 (we won't guess country codes)
+  if (s0.startsWith('+')) return s0;
+  if (s0.startsWith('00')) return `+${s0.slice(2)}`;
+
+  const digits = s0.replace(/[^0-9]/g, '');
+  if (!digits) return null;
+
+  const cc = opts?.defaultCountry ?? 'GB';
+
+  // If it already looks like country-code (no +), handle a couple common cases
+  if (digits.startsWith('44') && digits.length >= 10) return `+${digits}`;
+  if (digits.startsWith('1') && digits.length >= 10) return `+${digits}`;
+
+  if (cc === 'GB') {
+    // 07xxxxxxxxx -> +44...
+    if (digits.startsWith('0')) return `+44${digits.slice(1)}`;
+    return null;
+  }
+
+  if (cc === 'JM') {
+    // Jamaica is NANP (+1). Common local patterns: 876xxxxxxx (10 digits) or xxxxxxx (7 digits)
+    if (digits.length === 7) return `+1876${digits}`;
+    if (digits.length === 10 && digits.startsWith('876')) return `+1${digits}`;
+    if (digits.startsWith('0')) return `+1${digits.slice(1)}`;
+    return null;
+  }
+
+  if (cc === 'US' || cc === 'CA') {
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.startsWith('1') && digits.length === 11) return `+${digits}`;
+    return null;
+  }
+
   return null;
 }
 

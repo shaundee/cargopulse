@@ -1,26 +1,34 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Paper,
-  Stack,
+  ActionIcon,
+  Badge,
+  Button,
+  Divider,
   Group,
+  Modal,
+  Paper,
+  SimpleGrid,
+  Stack,
   Text,
   TextInput,
-  Button,
-  Table,
-  Badge,
-  Loader,
-  Drawer,
-  Divider,
-  FileInput,
-  Modal,
-  Checkbox,
-  Select,
-  Textarea,
+  ThemeIcon,
+  Image,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import type { ShipmentStatus, TemplateRow } from '../shipments/shipment-types';
+import {
+  IconCamera,
+  IconCheck,
+  IconClipboardCheck,
+  IconMapPin,
+  IconRefresh,
+  IconSearch,
+  IconTruck,
+  IconX,
+} from '@tabler/icons-react';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type AgentShipmentRow = {
   id: string;
@@ -33,550 +41,509 @@ type AgentShipmentRow = {
   public_tracking_token?: string | null;
 };
 
-type AgentActionStatus = 'arrived_destination' | 'collected_by_customer';
+type AgentActionStatus = 'arrived_destination' | 'out_for_delivery' | 'collected_by_customer';
 
-function renderTemplate(body: string, vars: Record<string, string>) {
-  return String(body ?? '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function labelStatus(s: string) {
+function statusLabel(s: string) {
   const map: Record<string, string> = {
-    received: 'Received (UK depot)',
+    received: 'Received (UK)',
     collected: 'Collected (UK)',
     loaded: 'Loaded',
-    departed_uk: 'Departed (UK)',
-    arrived_destination: 'Arrived (Destination)',
+    departed_uk: 'Departed UK',
+    arrived_destination: 'Arrived',
     out_for_delivery: 'Out for delivery',
     collected_by_customer: 'Collected by customer',
-    delivered: 'Delivered',
+    delivered: 'Delivered ✓',
   };
   return map[s] ?? s;
 }
+
+function statusColor(s: string) {
+  switch (s) {
+    case 'delivered': return 'green';
+    case 'out_for_delivery':
+    case 'collected_by_customer': return 'teal';
+    case 'arrived_destination': return 'cyan';
+    case 'departed_uk': return 'blue';
+    default: return 'gray';
+  }
+}
+
+function nextActions(status: string): AgentActionStatus[] {
+  switch (status) {
+    case 'departed_uk':
+    case 'loaded':
+      return ['arrived_destination'];
+    case 'arrived_destination':
+      return ['out_for_delivery', 'collected_by_customer'];
+    case 'out_for_delivery':
+      return ['collected_by_customer'];
+    default:
+      return [];
+  }
+}
+
+function actionLabel(s: AgentActionStatus) {
+  switch (s) {
+    case 'arrived_destination': return 'Mark arrived';
+    case 'out_for_delivery': return 'Out for delivery';
+    case 'collected_by_customer': return 'Collected by customer';
+  }
+}
+
+function fmtWhen(iso: string | null) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  const now = new Date();
+  const diffH = (now.getTime() - d.getTime()) / 3600000;
+  if (diffH < 24) return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+}
+
+function notifyAutoMessage(auto_message: any) {
+  if (!auto_message) return;
+  if (auto_message.skipped) return; // silent skip — don't spam agents
+  if (auto_message.mode === 'sent') {
+    notifications.show({ title: 'Customer notified', message: 'WhatsApp sent', color: 'green' });
+  } else if (auto_message.mode === 'failed') {
+    notifications.show({ title: 'Message failed', message: auto_message.error ?? 'Send failed', color: 'orange' });
+  }
+}
+
+// ─── PhotoCapture (inline, same pattern as field intake) ──────────────────────
+
+function PhotoCapture({
+  label,
+  photo,
+  onChange,
+  capture = 'environment',
+}: {
+  label: string;
+  photo: File | null;
+  onChange: (f: File | null) => void;
+  capture?: 'environment' | 'user';
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const previewUrl = photo ? URL.createObjectURL(photo) : null;
+
+  return (
+    <Stack gap="xs">
+      <Text size="sm" fw={500}>{label}</Text>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        capture={capture}
+        style={{ display: 'none' }}
+        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+      />
+      {previewUrl ? (
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <Image
+            src={previewUrl}
+            radius="sm"
+            h={140}
+            fit="cover"
+            alt="POD photo"
+            onLoad={() => URL.revokeObjectURL(previewUrl)}
+          />
+          <ActionIcon
+            size="sm"
+            color="red"
+            variant="filled"
+            radius="xl"
+            style={{ position: 'absolute', top: 4, right: 4 }}
+            onClick={() => onChange(null)}
+          >
+            <IconX size={12} />
+          </ActionIcon>
+        </div>
+      ) : (
+        <Button
+          variant="light"
+          leftSection={<IconCamera size={16} />}
+          onClick={() => inputRef.current?.click()}
+          fullWidth
+        >
+          {label}
+        </Button>
+      )}
+    </Stack>
+  );
+}
+
+// ─── Shipment Card ────────────────────────────────────────────────────────────
+
+function ShipmentCard({
+  row,
+  onAction,
+  onPod,
+}: {
+  row: AgentShipmentRow;
+  onAction: (row: AgentShipmentRow, status: AgentActionStatus) => void;
+  onPod: (row: AgentShipmentRow) => void;
+}) {
+  const isDelivered = row.current_status === 'delivered';
+  const actions = nextActions(row.current_status);
+  const canPod = !isDelivered;
+
+  return (
+    <Paper
+      withBorder
+      p="md"
+      radius="md"
+      style={{
+        opacity: isDelivered ? 0.55 : 1,
+        borderColor: isDelivered ? undefined : 'var(--mantine-color-gray-3)',
+      }}
+    >
+      <Stack gap="xs">
+        {/* Header */}
+        <Group justify="space-between" wrap="nowrap">
+          <Stack gap={2} style={{ minWidth: 0 }}>
+            <Text fw={800} size="lg" ff="monospace" style={{ letterSpacing: 0.5 }}>
+              {row.tracking_code}
+            </Text>
+            <Text size="sm" c="dimmed" truncate>
+              {row.destination ?? '—'}
+              {row.customer_name ? ` · ${row.customer_name}` : ''}
+            </Text>
+          </Stack>
+
+          <Stack gap={4} align="flex-end" style={{ flexShrink: 0 }}>
+            <Badge color={statusColor(row.current_status)} variant="filled" size="sm">
+              {statusLabel(row.current_status)}
+            </Badge>
+            <Text size="xs" c="dimmed">{fmtWhen(row.last_event_at)}</Text>
+          </Stack>
+        </Group>
+
+        {/* Actions */}
+        {(actions.length > 0 || canPod) && !isDelivered && (
+          <>
+            <Divider />
+            <Group gap="xs" wrap="wrap">
+              {actions.map((a) => (
+                <Button
+                  key={a}
+                  size="xs"
+                  variant={a === 'arrived_destination' ? 'filled' : 'light'}
+                  leftSection={a === 'arrived_destination' ? <IconMapPin size={13} /> : <IconTruck size={13} />}
+                  onClick={() => onAction(row, a)}
+                >
+                  {actionLabel(a)}
+                </Button>
+              ))}
+
+              <Button
+                size="xs"
+                variant="light"
+                color="green"
+                leftSection={<IconClipboardCheck size={13} />}
+                onClick={() => onPod(row)}
+              >
+                Deliver + POD
+              </Button>
+            </Group>
+          </>
+        )}
+
+        {isDelivered && (
+          <Group gap={6}>
+            <ThemeIcon size="xs" color="green" variant="light" radius="xl">
+              <IconCheck size={10} />
+            </ThemeIcon>
+            <Text size="xs" c="dimmed">Delivered</Text>
+          </Group>
+        )}
+      </Stack>
+    </Paper>
+  );
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 export function AgentClient() {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<AgentShipmentRow[]>([]);
-  const [selected, setSelected] = useState<AgentShipmentRow | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Templates (shared)
-  const [templates, setTemplates] = useState<TemplateRow[]>([]);
-  const [tplLoading, setTplLoading] = useState(false);
+  // Status confirm modal
+  const [actionTarget, setActionTarget] = useState<{ row: AgentShipmentRow; status: AgentActionStatus } | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
-  const enabledTemplates = useMemo(() => templates.filter((t) => t.enabled), [templates]);
-
-  const trackingUrl = useMemo(() => {
-    const token = selected?.public_tracking_token ?? null;
-    if (!token) return '';
-    if (typeof window === 'undefined') return '';
-    return `${window.location.origin}/t/${token}`;
-  }, [selected?.public_tracking_token]);
-
-  function notifyAutoMessage(auto_message: any) {
-    if (!auto_message) return;
-    if (auto_message.skipped) {
-      const reason = String(auto_message.reason ?? 'skipped');
-      notifications.show({
-        title: 'Customer update skipped',
-        message: reason,
-        color: reason === 'already_notified' ? 'yellow' : 'gray',
-      });
-      return;
-    }
-    const mode = String(auto_message.mode ?? '');
-    if (mode === 'sent') {
-      notifications.show({ title: 'Customer update sent', message: 'WhatsApp queued/sent.', color: 'green' });
-      return;
-    }
-    if (mode === 'logged_only') {
-      notifications.show({ title: 'Customer update logged', message: 'Twilio not configured (demo-safe).', color: 'blue' });
-      return;
-    }
-    if (mode === 'failed') {
-      notifications.show({ title: 'Customer update failed', message: auto_message.error ?? 'Send failed', color: 'red' });
-      return;
-    }
-  }
-
-  const loadTemplates = useCallback(async () => {
-    setTplLoading(true);
-    try {
-      const res = await fetch('/api/message-templates', { cache: 'no-store' });
-      const j = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(j?.error ?? 'Failed to load templates');
-      setTemplates(j?.templates ?? []);
-    } catch (e: any) {
-      notifications.show({ color: 'red', title: 'Templates failed', message: e?.message ?? 'Unknown error' });
-      setTemplates([]);
-    } finally {
-      setTplLoading(false);
-    }
-  }, []);
   // POD modal
-  const [podOpen, setPodOpen] = useState(false);
+  const [podTarget, setPodTarget] = useState<AgentShipmentRow | null>(null);
   const [receiverName, setReceiverName] = useState('');
-  const [podFile, setPodFile] = useState<File | null>(null);
+  const [podPhoto, setPodPhoto] = useState<File | null>(null);
   const [podBusy, setPodBusy] = useState(false);
-  const filtered = useMemo(() => rows, [rows]);
 
   const load = useCallback(async (query: string) => {
-    const qq = query.trim();
-
-    // cancel previous request
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-
     setLoading(true);
     try {
-      const res = await fetch(`/api/agent/shipments/list?q=${encodeURIComponent(qq)}`, {
+      const res = await fetch(`/api/agent/shipments/list?q=${encodeURIComponent(query.trim())}`, {
         cache: 'no-store',
         signal: ac.signal,
       });
-
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error ?? 'Failed to load');
-
       setRows(json?.shipments ?? []);
     } catch (e: any) {
-      if (e?.name === 'AbortError') return; // normal while typing
-      notifications.show({ color: 'red', title: 'Load failed', message: e?.message ?? 'Unknown error' });
-      setRows([]);
+      if (e?.name === 'AbortError') return;
+      notifications.show({ color: 'red', title: 'Load failed', message: e?.message });
     } finally {
       if (!ac.signal.aborted) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const delay = q.trim() ? 250 : 0; // debounce only when typing
-    const t = window.setTimeout(() => {
-      void load(q);
-    }, delay);
-
-    return () => window.clearTimeout(t);
+    const t = setTimeout(() => void load(q), q.trim() ? 250 : 0);
+    return () => clearTimeout(t);
   }, [q, load]);
 
-  useEffect(() => {
-    return () => abortRef.current?.abort();
-  }, []);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
-  useEffect(() => {
-    void loadTemplates();
-  }, [loadTemplates]);
-
-  // Status action modal
-  const [actionOpen, setActionOpen] = useState(false);
-  const [actionStatus, setActionStatus] = useState<AgentActionStatus | null>(null);
-  const [actionSendUpdate, setActionSendUpdate] = useState(true);
-  const [actionTemplateId, setActionTemplateId] = useState<string | null>(null);
-  const [actionBusy, setActionBusy] = useState(false);
-
-  const actionTemplates = useMemo(() => {
-    if (!actionStatus) return [];
-    return enabledTemplates.filter((t) => t.status === actionStatus);
-  }, [actionStatus, enabledTemplates]);
-
-  useEffect(() => {
-    if (!actionOpen) return;
-    const first = actionTemplates[0]?.id ?? null;
-    setActionTemplateId(first);
-  }, [actionOpen, actionTemplates]);
-
-  const actionPreview = useMemo(() => {
-    if (!actionOpen || !actionSendUpdate) return '';
-    const tpl = actionTemplates.find((t) => t.id === actionTemplateId) ?? actionTemplates[0] ?? null;
-    if (!tpl?.body) return '';
-    return renderTemplate(tpl.body, {
-      customer_name: selected?.customer_name ?? '',
-      tracking_code: selected?.tracking_code ?? '',
-      destination: selected?.destination ?? '',
-      status: String(actionStatus ?? ''),
-      note: '',
-      tracking_url: trackingUrl,
-
-      name: selected?.customer_name ?? '',
-      code: selected?.tracking_code ?? '',
-    });
-  }, [actionOpen, actionSendUpdate, actionTemplates, actionTemplateId, selected?.customer_name, selected?.tracking_code, selected?.destination, actionStatus, trackingUrl]);
-
-
-  function openRow(r: AgentShipmentRow) {
-    setSelected(r);
-    setDrawerOpen(true);
+  function patchRow(id: string, patch: Partial<AgentShipmentRow>) {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
-  function openPodFromSelected() {
-    if (!selected) return;
-    setReceiverName('');
-    setPodFile(null);
-    setPodOpen(true);
-  }
+  // ── Status action ──
 
-  function openStatusAction(nextStatus: AgentActionStatus) {
-    if (!selected) return;
-    setActionStatus(nextStatus);
-    setActionSendUpdate(true);
-    setActionOpen(true);
-  }
-
-  async function confirmStatusAction() {
-    if (!selected || !actionStatus) return;
-
+  async function confirmAction() {
+    if (!actionTarget) return;
     setActionBusy(true);
     try {
-      const res = await fetch('/api/shipments/events/add', {
+      const res = await fetch('/api/agent/shipments/status', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          shipmentId: selected.id,
-          status: actionStatus,
-          note: null,
-          autoLog: actionSendUpdate,
-          templateId: actionSendUpdate ? actionTemplateId : null,
-        }),
+        body: JSON.stringify({ shipmentId: actionTarget.row.id, status: actionTarget.status }),
       });
-
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error ?? 'Update failed');
 
-      notifications.show({ color: 'green', title: 'Updated', message: labelStatus(actionStatus) });
+      notifications.show({ color: 'green', title: 'Updated', message: statusLabel(actionTarget.status) });
       notifyAutoMessage(json?.auto_message);
 
-      setActionOpen(false);
-
-      await load(q);
-
-      setSelected((prev) =>
-        prev ? { ...prev, current_status: actionStatus, last_event_at: new Date().toISOString() } : prev
-      );
+      patchRow(actionTarget.row.id, {
+        current_status: actionTarget.status,
+        last_event_at: new Date().toISOString(),
+      });
+      setActionTarget(null);
     } catch (e: any) {
-      notifications.show({ color: 'red', title: 'Update failed', message: e?.message ?? 'Unknown error' });
+      notifications.show({ color: 'red', title: 'Update failed', message: e?.message });
     } finally {
       setActionBusy(false);
     }
   }
 
+  // ── POD ──
+
   async function submitPod() {
-    if (!selected) return;
-
+    if (!podTarget) return;
     if (!receiverName.trim()) {
-      notifications.show({ title: 'Missing receiver name', message: 'Enter who received the shipment.', color: 'red' });
+      notifications.show({ title: 'Missing receiver name', message: 'Who received the shipment?', color: 'red' });
       return;
     }
-    if (!podFile) {
-      notifications.show({ title: 'Missing photo', message: 'Choose a POD photo.', color: 'red' });
+    if (!podPhoto) {
+      notifications.show({ title: 'Missing photo', message: 'Take a POD photo first', color: 'red' });
       return;
     }
-
     setPodBusy(true);
     try {
       const fd = new FormData();
-      fd.set('shipmentId', selected.id);
+      fd.set('shipmentId', podTarget.id);
       fd.set('receiverName', receiverName.trim());
-      fd.set('file', podFile);
-
-      fd.set('sendUpdate', String(podSendUpdate));
-      if (podSendUpdate && podTemplateId) fd.set('templateId', podTemplateId);
+      fd.set('file', podPhoto);
+      fd.set('sendUpdate', 'true');
 
       const res = await fetch('/api/pod/complete', { method: 'POST', body: fd });
-      const j = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(j?.error || 'POD failed');
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? 'POD failed');
 
-      notifications.show({
-        title: 'Delivered',
-        message: `POD saved for ${selected.tracking_code}`,
-        color: 'green',
+      notifications.show({ color: 'green', title: 'Delivered!', message: `POD saved for ${podTarget.tracking_code}` });
+      notifyAutoMessage(json?.auto_message);
+
+      patchRow(podTarget.id, {
+        current_status: 'delivered',
+        last_event_at: new Date().toISOString(),
       });
-
-      setPodOpen(false);
-
-      // refresh list + drawer
-      await load(q);
-
-      // optimistic update in case list endpoint lags
-      setSelected((prev) =>
-        prev ? { ...prev, current_status: 'delivered', last_event_at: new Date().toISOString() } : prev
-      );
-
-      notifyAutoMessage(j?.auto_message);
+      setPodTarget(null);
+      setReceiverName('');
+      setPodPhoto(null);
     } catch (e: any) {
-      notifications.show({ title: 'POD failed', message: e?.message ?? 'Request failed', color: 'red' });
+      notifications.show({ color: 'red', title: 'POD failed', message: e?.message });
     } finally {
       setPodBusy(false);
     }
   }
 
-  // POD message options
-  const deliveredTemplates = useMemo(() => enabledTemplates.filter((t) => t.status === 'delivered'), [enabledTemplates]);
-  const [podSendUpdate, setPodSendUpdate] = useState(true);
-  const [podTemplateId, setPodTemplateId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!podOpen) return;
-    setPodSendUpdate(true);
-    setPodTemplateId(deliveredTemplates[0]?.id ?? null);
-  }, [podOpen, deliveredTemplates]);
-
-  const podPreview = useMemo(() => {
-    if (!podOpen || !podSendUpdate) return '';
-    const tpl = deliveredTemplates.find((t) => t.id === podTemplateId) ?? deliveredTemplates[0] ?? null;
-    if (!tpl?.body) return '';
-    return renderTemplate(tpl.body, {
-      customer_name: selected?.customer_name ?? '',
-      tracking_code: selected?.tracking_code ?? '',
-      destination: selected?.destination ?? '',
-      status: 'delivered',
-      note: '',
-      tracking_url: trackingUrl,
-
-      name: selected?.customer_name ?? '',
-      code: selected?.tracking_code ?? '',
-    });
-  }, [podOpen, podSendUpdate, deliveredTemplates, podTemplateId, selected?.customer_name, selected?.tracking_code, selected?.destination, trackingUrl]);
+  // ── Split active / delivered ──
+  const active = rows.filter((r) => r.current_status !== 'delivered');
+  const delivered = rows.filter((r) => r.current_status === 'delivered');
 
   return (
-    <Stack>
-      <Paper withBorder p="md" radius="md">
-        <Group justify="space-between" align="flex-end">
-          <div>
-            <Text fw={700}>Destination Agent Portal</Text>
-            <Text c="dimmed" size="sm">
-              Mark arrivals + customer collection + delivery POD.
-            </Text>
-          </div>
+    <Stack gap="md">
+      {/* Header */}
+      <Group justify="space-between" align="flex-end" wrap="wrap">
+        <Stack gap={2}>
+          <Text fw={700} size="lg">Agent portal</Text>
+          <Text size="sm" c="dimmed">
+            {active.length} active · {delivered.length} delivered
+          </Text>
+        </Stack>
 
-          <Group>
-            <TextInput
-              label="Search"
-              placeholder="Tracking code (e.g. SHP-123...)"
-              value={q}
-              onChange={(e) => setQ(e.currentTarget.value)}
-            />
-            <Button onClick={() => void load(q)} loading={loading}>
-              Refresh
-            </Button>
-
-
-          </Group>
+        <Group gap="xs">
+          <TextInput
+            placeholder="Search tracking…"
+            leftSection={<IconSearch size={15} />}
+            value={q}
+            onChange={(e) => setQ(e.currentTarget.value)}
+            w={200}
+          />
+          <ActionIcon
+            variant="light"
+            size="lg"
+            loading={loading}
+            onClick={() => void load(q)}
+            aria-label="Refresh"
+          >
+            <IconRefresh size={16} />
+          </ActionIcon>
         </Group>
+      </Group>
 
-        <Divider my="md" />
+      {/* Active shipments */}
+      {loading ? (
+        <Text c="dimmed" size="sm">Loading…</Text>
+      ) : active.length === 0 ? (
+        <Paper withBorder p="xl" radius="md">
+          <Stack align="center" gap="xs">
+            <ThemeIcon size="xl" variant="light" color="gray" radius="xl">
+              <IconCheck size={22} />
+            </ThemeIcon>
+            <Text fw={600}>All clear</Text>
+            <Text size="sm" c="dimmed">No active shipments for your destination.</Text>
+          </Stack>
+        </Paper>
+      ) : (
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+          {active.map((r) => (
+            <ShipmentCard
+              key={r.id}
+              row={r}
+              onAction={(row, status) => setActionTarget({ row, status })}
+              onPod={(row) => {
+                setPodTarget(row);
+                setReceiverName('');
+                setPodPhoto(null);
+              }}
+            />
+          ))}
+        </SimpleGrid>
+      )}
 
-        {loading ? (
-          <Group justify="center" py="xl">
-            <Loader />
-          </Group>
-        ) : (
-          <Table striped highlightOnHover>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Tracking</Table.Th>
-                <Table.Th>Status</Table.Th>
-                <Table.Th>Destination</Table.Th>
-                <Table.Th>Last update</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {filtered.map((r) => (
-                <Table.Tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => openRow(r)}>
-                  <Table.Td style={{ fontWeight: 600 }}>{r.tracking_code}</Table.Td>
-                  <Table.Td>
-                    <Badge variant="light">{labelStatus(r.current_status)}</Badge>
-                  </Table.Td>
-                  <Table.Td>{r.destination ?? '-'}</Table.Td>
-                  <Table.Td>{r.last_event_at ? new Date(r.last_event_at).toLocaleString() : '-'}</Table.Td>
-                </Table.Tr>
-              ))}
-              {filtered.length === 0 ? (
-                <Table.Tr>
-                  <Table.Td colSpan={4}>
-                    <Text c="dimmed" size="sm">
-                      No shipments found.
-                    </Text>
-                  </Table.Td>
-                </Table.Tr>
-              ) : null}
-            </Table.Tbody>
-          </Table>
-        )}
-      </Paper>
+      {/* Delivered (collapsed) */}
+      {delivered.length > 0 && (
+        <Stack gap="xs">
+          <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: 1 }}>
+            Delivered ({delivered.length})
+          </Text>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            {delivered.map((r) => (
+              <ShipmentCard
+                key={r.id}
+                row={r}
+                onAction={() => {}}
+                onPod={() => {}}
+              />
+            ))}
+          </SimpleGrid>
+        </Stack>
+      )}
 
-      <Drawer
-        opened={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        position="right"
-        size="md"
-        title={selected ? selected.tracking_code : 'Shipment'}
+      {/* Status confirm modal */}
+      <Modal
+        opened={Boolean(actionTarget)}
+        onClose={() => !actionBusy && setActionTarget(null)}
+        title={actionTarget ? actionLabel(actionTarget.status) : ''}
+        size="sm"
+        centered
       >
-        {!selected ? null : (
-          <Stack>
-            <Group justify="space-between">
-              <Text fw={600}>Status</Text>
-              <Badge variant="light">{labelStatus(selected.current_status)}</Badge>
-            </Group>
-
-            <Text size="sm" c="dimmed">
-              Destination: {selected.destination ?? '-'}
+        {actionTarget && (
+          <Stack gap="sm">
+            <Text size="sm">
+              <b>{actionTarget.row.tracking_code}</b> · {actionTarget.row.destination ?? '—'}
             </Text>
-
-            {selected.customer_name || selected.customer_phone ? (
-              <Text size="sm" c="dimmed">
-                Customer: {selected.customer_name ?? '-'} • {selected.customer_phone ?? '-'}
-              </Text>
-            ) : null}
-
-            <Divider />
-
-            <Text fw={600}>Actions</Text>
-
-            <Button
-              loading={actionBusy}
-              disabled={actionBusy || selected.current_status === 'delivered'}
-              onClick={() => openStatusAction('arrived_destination')}
-            >
-              Mark arrived (destination)
-            </Button>
-
-            <Button
-              loading={actionBusy}
-              disabled={actionBusy || selected.current_status === 'delivered'}
-              onClick={() => openStatusAction('collected_by_customer')}
-              variant="light"
-            >
-              Mark collected by customer
-            </Button>
-
-            <Button
-              variant="default"
-              disabled={selected.current_status === 'delivered'}
-              onClick={openPodFromSelected}
-            >
-              Deliver + capture POD
-            </Button>
-
-            {selected.current_status === 'delivered' ? (
-              <Text size="sm" c="dimmed">
-                Delivered is terminal.
-              </Text>
-            ) : null}
+            {actionTarget.row.customer_name && (
+              <Text size="sm" c="dimmed">Customer: {actionTarget.row.customer_name}</Text>
+            )}
+            <Text size="sm" c="dimmed">
+              Customer will be notified automatically if a template is configured.
+            </Text>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setActionTarget(null)} disabled={actionBusy}>
+                Cancel
+              </Button>
+              <Button onClick={confirmAction} loading={actionBusy}>
+                Confirm
+              </Button>
+            </Group>
           </Stack>
         )}
-      </Drawer>
-
-      <Modal opened={podOpen} onClose={() => setPodOpen(false)} title="Deliver + capture POD">
-        <Stack gap="sm">
-          <Text size="sm">{selected ? `${selected.tracking_code} • ${selected.destination ?? '-'}` : ''}</Text>
-
-          <TextInput
-            label="Receiver name"
-            value={receiverName}
-            onChange={(e) => setReceiverName(e.currentTarget.value)}
-            placeholder="e.g., Marsha Brown"
-          />
-
-          <FileInput
-            label="POD photo"
-            value={podFile}
-            onChange={setPodFile}
-            accept="image/*"
-            placeholder="Choose image..."
-          />
-
-          <Divider my="xs" />
-
-          <Checkbox
-            label="Send update to customer"
-            checked={podSendUpdate}
-            onChange={(e) => setPodSendUpdate(e.currentTarget.checked)}
-            disabled={tplLoading}
-          />
-
-          {podSendUpdate ? (
-            <>
-              <Select
-                label="Message template"
-                data={deliveredTemplates.map((t) => ({ value: t.id, label: `Delivered` }))}
-                value={podTemplateId}
-                onChange={(v) => setPodTemplateId(v ?? null)}
-                disabled={tplLoading || !deliveredTemplates.length}
-                placeholder={tplLoading ? 'Loading templates...' : 'No templates'}
-              />
-
-              <Textarea label="Preview" value={podPreview} readOnly autosize minRows={3} />
-              <Text size="xs" c="dimmed">
-                If WhatsApp isn’t configured, this will be logged instead (demo-safe).
-              </Text>
-            </>
-          ) : null}
-
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setPodOpen(false)} disabled={podBusy}>
-              Cancel
-            </Button>
-            <Button onClick={submitPod} loading={podBusy}>
-              Save POD
-            </Button>
-          </Group>
-        </Stack>
       </Modal>
 
+      {/* POD modal */}
       <Modal
-        opened={actionOpen}
-        onClose={() => setActionOpen(false)}
-        title={actionStatus ? `Confirm: ${labelStatus(actionStatus)}` : 'Confirm update'}
+        opened={Boolean(podTarget)}
+        onClose={() => !podBusy && setPodTarget(null)}
+        title="Deliver + capture POD"
+        size="sm"
+        centered
       >
-        <Stack gap="sm">
-          <Text size="sm">{selected ? `${selected.tracking_code} • ${selected.destination ?? '-'}` : ''}</Text>
+        {podTarget && (
+          <Stack gap="sm">
+            <Text size="sm">
+              <b>{podTarget.tracking_code}</b> · {podTarget.destination ?? '—'}
+            </Text>
 
-          <Checkbox
-            label="Send update to customer"
-            checked={actionSendUpdate}
-            onChange={(e) => setActionSendUpdate(e.currentTarget.checked)}
-            disabled={tplLoading}
-          />
+            <TextInput
+              label="Receiver name"
+              value={receiverName}
+              onChange={(e) => setReceiverName(e.currentTarget.value)}
+              placeholder="e.g. Marsha Brown"
+              required
+            />
 
-          {actionSendUpdate ? (
-            <>
-              <Select
-                label="Message template"
-                data={actionTemplates.map((t) => ({ value: t.id, label: labelStatus(t.status as ShipmentStatus) }))}
-                value={actionTemplateId}
-                onChange={(v) => setActionTemplateId(v ?? null)}
-                disabled={tplLoading || !actionTemplates.length}
-                placeholder={tplLoading ? 'Loading templates...' : 'No templates'}
-              />
-              {!tplLoading && actionTemplates.length === 0 ? (
-  <Text size="xs" c="dimmed">
-    No enabled templates for this status yet. Confirm will still update the status; the message will be skipped.
-    Create one in Messages → “New template”.
-  </Text>
-) : null}
+            <PhotoCapture
+              label="Take POD photo"
+              photo={podPhoto}
+              onChange={setPodPhoto}
+              capture="environment"
+            />
 
-              <Textarea label="Preview" value={actionPreview} readOnly autosize minRows={3} />
-              <Text size="xs" c="dimmed">
-                If WhatsApp isn’t configured, this will be logged instead (demo-safe).
-              </Text>
-            </>
-          ) : null}
-
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setActionOpen(false)} disabled={actionBusy}>
-              Cancel
-            </Button>
-   <Button
-  onClick={confirmStatusAction}
-  loading={actionBusy}
-  disabled={actionBusy || (actionSendUpdate && actionTemplates.length > 0 && !actionTemplateId)}
->
-  Confirm
-</Button>
-          </Group>
-        </Stack>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setPodTarget(null)} disabled={podBusy}>
+                Cancel
+              </Button>
+              <Button
+                onClick={submitPod}
+                loading={podBusy}
+                disabled={!receiverName.trim() || !podPhoto}
+                leftSection={<IconClipboardCheck size={16} />}
+              >
+                Save POD
+              </Button>
+            </Group>
+          </Stack>
+        )}
       </Modal>
     </Stack>
   );
 }
-
-

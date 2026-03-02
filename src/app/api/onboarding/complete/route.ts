@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 
 const defaults = [
   { status: 'received', body: 'Hi {{name}}, we received your shipment ({{code}}) at our UK depot.\nTrack: {{tracking_url}}' },
@@ -14,6 +15,8 @@ const defaults = [
 
 
 export async function POST(req: Request) {
+    const blocked = await blockIfAgentMode();
+    if (blocked) return blocked;
   const supabase = await createSupabaseServerClient();
 
   const {

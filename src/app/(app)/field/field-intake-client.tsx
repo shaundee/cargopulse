@@ -2,22 +2,27 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActionIcon,
   Badge,
   Button,
   Checkbox,
-  FileInput,
+  Combobox,
   Group,
+  Image,
+  Input,
   NumberInput,
   Paper,
   Select,
+  SimpleGrid,
   Stack,
   Table,
   Text,
   Textarea,
   TextInput,
+  useCombobox,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconCloud, IconDeviceFloppy, IconTrash } from '@tabler/icons-react';
+import { IconCamera, IconCloud, IconDeviceFloppy, IconTrash, IconX } from '@tabler/icons-react';
 import {
   safeUuid,
   type IntakePayload,
@@ -96,6 +101,191 @@ function makeBlankForm(): IntakePayload {
   };
 }
 
+// ─── PhotoCapture ─────────────────────────────────────────────────────────────
+// Camera-first multi-photo picker with instant previews and per-photo remove.
+// Works on mobile (opens camera directly) and desktop (file picker).
+
+function PhotoCapture({
+  label,
+  photos,
+  onChange,
+  maxPhotos = 10,
+  accept = 'image/*',
+  capture,
+}: {
+  label: string;
+  photos: File[];
+  onChange: (files: File[]) => void;
+  maxPhotos?: number;
+  accept?: string;
+  capture?: 'environment' | 'user';
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function handleFiles(fileList: FileList | null) {
+    if (!fileList) return;
+    const incoming = Array.from(fileList);
+    const combined = [...photos, ...incoming].slice(0, maxPhotos);
+    onChange(combined);
+  }
+
+  function remove(idx: number) {
+    onChange(photos.filter((_, i) => i !== idx));
+  }
+
+  const previews = photos.map((f) => URL.createObjectURL(f));
+
+  return (
+    <Stack gap="xs">
+      <Group justify="space-between" align="center">
+        <Text size="sm" fw={500}>{label}</Text>
+        {photos.length > 0 && (
+          <Badge variant="light" size="sm">{photos.length} / {maxPhotos}</Badge>
+        )}
+      </Group>
+
+      {/* Hidden native input — capture attribute opens camera directly on mobile */}
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        multiple={maxPhotos > 1}
+        capture={capture}
+        style={{ display: 'none' }}
+        onChange={(e) => handleFiles(e.target.files)}
+        onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+      />
+
+      {/* Previews */}
+      {previews.length > 0 && (
+        <SimpleGrid cols={3} spacing="xs">
+          {previews.map((src, i) => (
+            <div key={i} style={{ position: 'relative' }}>
+              <Image
+                src={src}
+                radius="sm"
+                h={80}
+                fit="cover"
+                alt={`Photo ${i + 1}`}
+                onLoad={() => URL.revokeObjectURL(src)}
+              />
+              <ActionIcon
+                size="xs"
+                color="red"
+                variant="filled"
+                radius="xl"
+                style={{ position: 'absolute', top: 3, right: 3 }}
+                onClick={() => remove(i)}
+                aria-label={`Remove photo ${i + 1}`}
+              >
+                <IconX size={10} />
+              </ActionIcon>
+            </div>
+          ))}
+        </SimpleGrid>
+      )}
+
+      {/* Add button */}
+      {photos.length < maxPhotos && (
+        <Button
+          variant="light"
+          size="sm"
+          leftSection={<IconCamera size={16} />}
+          onClick={() => inputRef.current?.click()}
+          fullWidth={photos.length === 0}
+        >
+          {photos.length === 0 ? `Add ${label.toLowerCase()}` : 'Add more'}
+        </Button>
+      )}
+
+      {photos.length > 0 && (
+        <Button
+          variant="subtle"
+          size="xs"
+          color="red"
+          leftSection={<IconX size={12} />}
+          onClick={() => onChange([])}
+        >
+          Clear all
+        </Button>
+      )}
+    </Stack>
+  );
+}
+
+// Mantine v8 creatable-style combobox for destination field
+function DestinationCombobox({
+  destinations,
+  value,
+  onChange,
+}: {
+  destinations: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const combobox = useCombobox({ onDropdownClose: () => combobox.resetSelectedOption() });
+  const [search, setSearch] = useState(value);
+
+  // Keep search input in sync when value changes externally (e.g. form reset)
+  useState(() => { setSearch(value); });
+
+  const filtered = destinations.filter((d) =>
+    d.toLowerCase().includes(search.toLowerCase().trim())
+  );
+
+  const showCreate =
+    search.trim().length > 0 &&
+    !destinations.some((d) => d.toLowerCase() === search.trim().toLowerCase());
+
+  const options = filtered.map((d) => (
+    <Combobox.Option value={d} key={d}>{d}</Combobox.Option>
+  ));
+
+  return (
+    <Combobox
+      store={combobox}
+      onOptionSubmit={(val) => {
+        onChange(val);
+        setSearch(val);
+        combobox.closeDropdown();
+      }}
+    >
+      <Combobox.Target>
+        <Input.Wrapper label="Destination" required>
+          <Input
+            component="input"
+            placeholder="Select or type destination"
+            value={search}
+            onChange={(e) => {
+              const v = e.currentTarget.value;
+              setSearch(v);
+              onChange(v);
+              combobox.openDropdown();
+            }}
+            onClick={() => combobox.openDropdown()}
+            onFocus={() => combobox.openDropdown()}
+            onBlur={() => combobox.closeDropdown()}
+          />
+        </Input.Wrapper>
+      </Combobox.Target>
+
+      <Combobox.Dropdown>
+        <Combobox.Options>
+          {options}
+          {showCreate && (
+            <Combobox.Option value={search.trim()} key="__create">
+              + Use &ldquo;{search.trim()}&rdquo;
+            </Combobox.Option>
+          )}
+          {!options.length && !showCreate && (
+            <Combobox.Empty>No destinations found</Combobox.Empty>
+          )}
+        </Combobox.Options>
+      </Combobox.Dropdown>
+    </Combobox>
+  );
+}
+
 export function FieldIntakeClient() {
   const [form, setForm] = useState<IntakePayload>(() => makeBlankForm());
   const [photos, setPhotos] = useState<File[]>([]);
@@ -103,6 +293,18 @@ export function FieldIntakeClient() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [items, setItems] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
+  const [destinations, setDestinations] = useState<string[]>([]);
+
+  // Load destinations once on mount — best effort, falls back gracefully
+  useEffect(() => {
+    fetch('/api/destinations')
+      .then((r) => r.json())
+      .then((j) => {
+        const names: string[] = (j.destinations ?? []).map((d: any) => String(d.name));
+        if (names.length) setDestinations(names);
+      })
+      .catch(() => {/* stay empty — field still works via creatable */});
+  }, []);
 
   const syncingRef = useRef(false);
   const autoSyncArmedRef = useRef(false);
@@ -399,14 +601,10 @@ export function FieldIntakeClient() {
           />
 
           <Group grow align="flex-end">
-            <TextInput
-              label="Destination"
-              placeholder="e.g., Jamaica / Barbados / St Lucia"
+            <DestinationCombobox
+              destinations={destinations}
               value={form.destination}
-              onChange={(e) => {
-                const v = e.currentTarget.value;
-                setForm((p) => ({ ...p, destination: v }));
-              }}
+              onChange={(v) => setForm((p) => ({ ...p, destination: v }))}
             />
 
             <Select
@@ -615,19 +813,21 @@ export function FieldIntakeClient() {
             }}
           />
 
-          <FileInput
-            multiple
-            label="Pickup photos (optional)"
-            placeholder="Take / choose photos"
-            value={photos}
-            onChange={(v) => setPhotos(toFileArray(v))}
+          <PhotoCapture
+            label="Pickup photos"
+            photos={photos}
+            onChange={setPhotos}
+            capture="environment"
+            maxPhotos={10}
           />
 
-          <FileInput
-            label="Signature (optional)"
-            placeholder="Capture signature"
-            value={signature}
-            onChange={(v) => setSignature(toSingleFile(v))}
+          <PhotoCapture
+            label="Signature"
+            photos={signature ? [signature] : []}
+            onChange={(files) => setSignature(files[0] ?? null)}
+            capture="user"
+            maxPhotos={1}
+            accept="image/*"
           />
 
           <Group justify="flex-end">

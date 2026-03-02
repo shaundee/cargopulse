@@ -33,15 +33,24 @@ export type ShipmentRow = {
   destination: string;
   current_status: ShipmentStatus;
   last_event_at: string;
-  customers: { name: string; phone: string } | null;
-    service_type?: 'depot' | 'door_to_door' | string | null;
+  customers: { name: string; phone: string; phone_e164?: string | null } | null;
+  service_type?: 'depot' | 'door_to_door' | string | null;
   created_at?: string | null;
-
+  public_tracking_token?: string | null;
+  last_outbound_message_at?: string | null;
+  last_outbound_message_status?: string | null;
+  last_outbound_send_status?: string | null;
+  last_outbound_preview?: string | null;
+  has_pod?: boolean;
+  has_pickup_assets?: boolean;
+  internal_notes?: string | null;
+  reference_no?: string | null;
 }
 
 export type NewShipmentForm = {
-  customerName: string;
+ customerName: string;
   phone: string;
+  phoneCountry: 'GB' | 'JM' | 'US' | 'CA';
   destination: string;
   serviceType: 'depot' | 'door_to_door';
 };
@@ -80,6 +89,7 @@ export type ShipmentEventRow = {
   status: ShipmentStatus;
   note?: string | null;
   occurred_at?: string | null;
+  actor_label?: string | null; // resolved server-side: "Admin", "Staff", agent name, etc.
 };
 
 export type PodRow = {
@@ -99,6 +109,7 @@ export type ShipmentDetail = {
   customers?: { name: string; phone: string } | null;
   pod?: PodRow | PodRow[] | null;
   public_tracking_token?: string | null;
+  
 
   // Cargo
   cargo_type?: string | null;
