@@ -1,6 +1,7 @@
 import { notFound, redirect } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { PrintControls } from './print-controls';
+import { canUseBOL } from '@/lib/billing/plan';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,14 @@ export default async function ShipmentPrintPage({
     .maybeSingle();
 
   if (!membership?.org_id) redirect('/onboarding');
+
+  const { data: billing } = await supabase
+    .from('organization_billing')
+    .select('status, plan_tier')
+    .eq('org_id', membership.org_id)
+    .maybeSingle();
+
+  if (!canUseBOL(billing)) redirect('/settings?upgrade=bol');
 
   const { data: shipment } = await supabase
     .from('shipments')

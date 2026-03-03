@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
 import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
 import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
+import { canSendWhatsApp } from '@/lib/billing/plan';
 
 function renderTemplate(body: string, vars: Record<string, string>) {
   return body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
@@ -76,16 +77,15 @@ if (blocked) return blocked;
 
     if (autoLog) {
       try {
-        // subscription gate (keep early so we don’t do extra work)
+        // plan gate: whatsapp requires starter or pro
         const { data: billing } = await supabase
           .from('organization_billing')
-          .select('status')
+          .select('status, plan_tier')
           .eq('org_id', (shipment as any).org_id)
           .maybeSingle();
 
-        const billingStatus = String(billing?.status ?? 'inactive').toLowerCase();
-        if (!['active', 'trialing'].includes(billingStatus)) {
-          auto_message = { ok: true, skipped: true, reason: 'subscription_required' };
+        if (!canSendWhatsApp(billing)) {
+          auto_message = { ok: true, skipped: true, reason: 'plan_upgrade_required' };
           try {
             revalidatePath('/shipments');
           } catch {}

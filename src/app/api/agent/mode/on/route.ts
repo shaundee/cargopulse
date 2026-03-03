@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { canUseAgentPortal } from '@/lib/billing/plan';
 
 export async function GET(req: Request) {
   const supabase = await createSupabaseServerClient();
@@ -9,6 +10,23 @@ export async function GET(req: Request) {
     const url = new URL('/login', req.url);
     url.searchParams.set('next', '/agent');
     return NextResponse.redirect(url);
+  }
+
+  const { data: membership } = await supabase
+    .from('org_members')
+    .select('org_id')
+    .eq('user_id', user.id)
+    .limit(1)
+    .maybeSingle();
+
+  const { data: billing } = await supabase
+    .from('organization_billing')
+    .select('status, plan_tier')
+    .eq('org_id', membership?.org_id ?? '')
+    .maybeSingle();
+
+  if (!canUseAgentPortal(billing)) {
+    return NextResponse.redirect(new URL('/settings?upgrade=agent_portal', req.url));
   }
 
   const resp = NextResponse.redirect(new URL('/agent', req.url));

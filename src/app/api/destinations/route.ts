@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
+import { canAddDestination } from '@/lib/billing/plan';
 
 export async function GET() {
       const blocked = await blockIfAgentMode();
@@ -57,6 +58,22 @@ export async function POST(req: Request) {
 
   if (memErr) return NextResponse.json({ error: memErr.message }, { status: 400 });
   if (!mem?.org_id) return NextResponse.json({ error: 'No org membership' }, { status: 400 });
+
+  const { count: destCount } = await supabase
+    .from('org_destinations')
+    .select('id', { count: 'exact', head: true })
+    .eq('org_id', mem.org_id)
+    .eq('active', true);
+
+  const { data: billing } = await supabase
+    .from('organization_billing')
+    .select('status, plan_tier')
+    .eq('org_id', mem.org_id)
+    .maybeSingle();
+
+  if (!canAddDestination(billing, destCount ?? 0)) {
+    return NextResponse.json({ error: 'multi_destination_upgrade_required' }, { status: 402 });
+  }
 
   const { data, error } = await supabase
     .from('org_destinations')

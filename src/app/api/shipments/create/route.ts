@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { normalizeE164Phone } from '@/lib/whatsapp/twilio'; 
+import { normalizeE164Phone } from '@/lib/whatsapp/twilio';
 import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
+import { stripe } from '@/lib/billing/stripe';
+import { canCreateShipment } from '@/lib/billing/plan';
 
 function makeTrackingCode() {
   // e.g. SHP-6H2K9Q (fast + human-friendly)
@@ -52,16 +54,17 @@ if (!phoneE164) return NextResponse.json({ error: 'Phone must be valid (E.164). 
   if (!membership?.org_id) return NextResponse.json({ error: 'No organization membership' }, { status: 400 });
 
   const orgId = membership.org_id as string;
-  const { data: billing } = await supabase
-  .from('organization_billing')
-  .select('status')
-  .eq('org_id', orgId)
-  .maybeSingle();
 
-const billingStatus = String(billing?.status ?? 'inactive').toLowerCase();
-if (!['active', 'trialing'].includes(billingStatus)) {
-  return NextResponse.json({ error: 'subscription_required' }, { status: 402 });
-}
+  const { data: billing } = await supabase
+    .from('organization_billing')
+    .select('status, plan_tier, shipment_count, stripe_customer_id')
+    .eq('org_id', orgId)
+    .maybeSingle();
+
+  const check = canCreateShipment(billing);
+  if (!check.allowed) {
+    return NextResponse.json({ error: check.reason }, { status: 402 });
+  }
 
   // 1) Upsert customer by (org_id, phone)
   const { data: customer, error: custErr } = await supabase
@@ -111,6 +114,21 @@ if (!['active', 'trialing'].includes(billingStatus)) {
   // Refresh shipments page cache (server-rendered wrapper)
   revalidatePath('/shipments');
 
+  // Increment shipment_count atomically (best-effort, non-fatal)
+  await supabase.rpc('increment_shipment_count', { p_org_id: orgId });
+
+  // Starter plan overage: fire a Billing Meter event immediately.
+  // Meter must be created in Stripe dashboard with event_name 'cargopulse_starter_shipment'.
+  if (check.overage && billing?.stripe_customer_id) {
+    try {
+      await stripe.billing.meterEvents.create({
+        event_name: 'cargopulse_starter_shipment',
+        payload: { value: '1', stripe_customer_id: billing.stripe_customer_id },
+      });
+    } catch (e: any) {
+      console.warn('[shipments/create] Stripe meter event failed:', e?.message);
+    }
+  }
 
 // 2b) Optional: create initial ledger rows (best-effort)
 const ledgerRows: any[] = [];

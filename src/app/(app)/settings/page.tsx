@@ -24,7 +24,7 @@ export default async function SettingsPage() {
 
   const { data: billing } = await supabase
     .from('organization_billing')
-    .select('status, current_period_end, stripe_customer_id')
+    .select('status, plan_tier, shipment_count, billing_period_start, current_period_end, stripe_customer_id')
     .eq('org_id', member.org_id)
     .maybeSingle();
 

@@ -7,11 +7,15 @@ import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 export const runtime = 'nodejs';
 
 export async function POST(req: Request) {
-      const blocked = await blockIfAgentMode();
-    if (blocked) return blocked;
+  const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const reqBody = await req.json().catch(() => ({}));
+  const plan: 'starter' | 'pro' =
+    String(reqBody?.plan ?? 'pro') === 'starter' ? 'starter' : 'pro';
 
   const { data: membership } = await supabase
     .from('org_members')
@@ -44,20 +48,35 @@ export async function POST(req: Request) {
     );
   }
 
- const baseUrl =
-  (process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : null) ??
-  getBaseUrlFromHeaders(new Headers(req.headers));
-  const priceId = process.env.STRIPE_PRICE_ID_CORE!;
-  if (!priceId) return NextResponse.json({ error: 'Missing STRIPE_PRICE_ID_CORE' }, { status: 500 });
+  const baseUrl =
+    (process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : null) ??
+    getBaseUrlFromHeaders(new Headers(req.headers));
+
+  let lineItems: { price: string; quantity?: number }[];
+  if (plan === 'starter') {
+    const flatPrice = process.env.STRIPE_PRICE_ID_STARTER;
+    const meteredPrice = process.env.STRIPE_METERED_PRICE_ID_STARTER;
+    if (!flatPrice || !meteredPrice)
+      return NextResponse.json({ error: 'Starter prices not configured (STRIPE_PRICE_ID_STARTER / STRIPE_METERED_PRICE_ID_STARTER)' }, { status: 500 });
+    lineItems = [
+      { price: flatPrice, quantity: 1 },
+      { price: meteredPrice },  // metered — no quantity
+    ];
+  } else {
+    const proPrice = process.env.STRIPE_PRICE_ID_CORE;
+    if (!proPrice)
+      return NextResponse.json({ error: 'Missing STRIPE_PRICE_ID_CORE' }, { status: 500 });
+    lineItems = [{ price: proPrice, quantity: 1 }];
+  }
 
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     customer: customerId,
-    line_items: [{ price: priceId, quantity: 1 }],
- success_url: `${baseUrl}/billing/return?status=success&session_id={CHECKOUT_SESSION_ID}`,
-cancel_url: `${baseUrl}/billing/return?status=cancel`,
+    line_items: lineItems,
+    success_url: `${baseUrl}/billing/return?status=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${baseUrl}/billing/return?status=cancel`,
     client_reference_id: orgId,
-    metadata: { org_id: orgId },
+    metadata: { org_id: orgId, plan_tier: plan },
   });
 
   return NextResponse.json({ url: session.url });

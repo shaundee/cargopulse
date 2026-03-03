@@ -8,6 +8,7 @@ import {
   Divider,
   Group,
   Paper,
+  Progress,
   Stack,
   Tabs,
   Text,
@@ -25,18 +26,28 @@ import {
   IconMessage,
   IconUser,
 } from '@tabler/icons-react';
+import { PLAN_LIMITS, getPlanTier } from '@/lib/billing/plan';
 
 type Org = { id: string; name: string; support_phone: string | null; logo_url: string | null };
-type Billing = { status: string; current_period_end?: string | null; stripe_customer_id?: string | null } | null;
+type Billing = {
+  status: string;
+  plan_tier?: string | null;
+  shipment_count?: number | null;
+  billing_period_start?: string | null;
+  current_period_end?: string | null;
+  stripe_customer_id?: string | null;
+} | null;
 
-function planLabel(status: string) {
-  switch (status) {
-    case 'active': return { label: 'Pro', color: 'green' };
-    case 'trialing': return { label: 'Trial', color: 'blue' };
-    case 'past_due': return { label: 'Past due', color: 'orange' };
-    case 'canceled': return { label: 'Cancelled', color: 'red' };
-    default: return { label: 'Free', color: 'gray' };
+function planLabel(billing: Billing) {
+  const status = billing?.status ?? 'inactive';
+  const tier = getPlanTier(billing as any);
+  if (status === 'past_due') return { label: 'Past due', color: 'orange' };
+  if (status === 'canceled') return { label: 'Cancelled', color: 'red' };
+  if (status === 'active' || status === 'trialing') {
+    if (tier === 'starter') return { label: status === 'trialing' ? 'Starter Trial' : 'Starter', color: 'teal' };
+    return { label: status === 'trialing' ? 'Pro Trial' : 'Pro', color: 'green' };
   }
+  return { label: 'Free', color: 'gray' };
 }
 
 function fmtDate(iso?: string | null) {
@@ -128,22 +139,30 @@ function OrgProfileTab({ org, isAdmin }: { org: Org; isAdmin: boolean }) {
 // ─── Billing Tab ──────────────────────────────────────────────────────────────
 
 function BillingTab({ billing, isAdmin }: { billing: Billing; isAdmin: boolean }) {
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<string | null>(null);
   const status = billing?.status ?? 'inactive';
-  const plan = planLabel(status);
+  const plan = planLabel(billing);
+  const tier = getPlanTier(billing as any);
   const periodEnd = fmtDate(billing?.current_period_end);
   const isActive = status === 'active' || status === 'trialing';
+  const shipmentCount = billing?.shipment_count ?? 0;
+  const shipmentLimit = tier === 'pro' ? null : PLAN_LIMITS[tier].shipments;
 
-  async function go(path: string) {
-    setLoading(true);
+  async function go(path: string, body?: object) {
+    const key = path + JSON.stringify(body ?? {});
+    setLoading(key);
     try {
-      const res = await fetch(path, { method: 'POST' });
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.url) throw new Error(json?.error ?? 'Billing error');
       window.location.href = json.url;
     } catch (e: any) {
       notifications.show({ title: 'Error', message: e?.message, color: 'red' });
-      setLoading(false);
+      setLoading(null);
     }
   }
 
@@ -166,33 +185,75 @@ function BillingTab({ billing, isAdmin }: { billing: Billing; isAdmin: boolean }
             )}
           </Group>
 
-          {!isActive && (
-            <Paper withBorder p="sm" radius="sm" bg="blue.0">
-              <Stack gap={4}>
-                <Text size="sm" fw={600}>Upgrade to Pro — £49/month</Text>
-                <Text size="xs" c="dimmed">
-                  Unlimited shipments · WhatsApp customer updates · Agent portal · PDF receipts · Priority support
+          {/* Shipment usage meter — free and starter only */}
+          {isActive && shipmentLimit !== null && (
+            <Stack gap={4}>
+              <Group justify="space-between">
+                <Text size="xs" c="dimmed">Shipments this month</Text>
+                <Text size="xs" fw={600}>
+                  {shipmentCount} / {shipmentLimit}
+                  {tier === 'starter' && shipmentCount > shipmentLimit && (
+                    <Text span c="orange" size="xs"> (+{shipmentCount - shipmentLimit} overage)</Text>
+                  )}
                 </Text>
-              </Stack>
-            </Paper>
+              </Group>
+              <Progress
+                value={Math.min((shipmentCount / shipmentLimit) * 100, 100)}
+                color={shipmentCount >= shipmentLimit ? 'orange' : 'blue'}
+                size="sm"
+                radius="xl"
+              />
+            </Stack>
+          )}
+
+          {/* Upgrade options — shown when not on a paid plan */}
+          {!isActive && (
+            <Stack gap="xs">
+              <Paper withBorder p="sm" radius="sm" bg="teal.0">
+                <Stack gap={4}>
+                  <Text size="sm" fw={600}>Starter — £19/month</Text>
+                  <Text size="xs" c="dimmed">
+                    75 shipments/month · WhatsApp updates · £0.40/shipment overage
+                  </Text>
+                </Stack>
+              </Paper>
+              <Paper withBorder p="sm" radius="sm" bg="blue.0">
+                <Stack gap={4}>
+                  <Text size="sm" fw={600}>Pro — £49/month</Text>
+                  <Text size="xs" c="dimmed">
+                    Unlimited shipments · Agent portal · BOL receipts · Multi-destination
+                  </Text>
+                </Stack>
+              </Paper>
+            </Stack>
           )}
 
           {isAdmin && (
             <Group>
               {!isActive ? (
-                <Button
-                  leftSection={<IconCreditCard size={16} />}
-                  onClick={() => go('/api/billing/checkout')}
-                  loading={loading}
-                >
-                  Subscribe — £49/mo
-                </Button>
+                <>
+                  <Button
+                    variant="light"
+                    leftSection={<IconCreditCard size={16} />}
+                    onClick={() => go('/api/billing/checkout', { plan: 'starter' })}
+                    loading={loading === '/api/billing/checkout{"plan":"starter"}'}
+                  >
+                    Get Starter — £19/mo
+                  </Button>
+                  <Button
+                    leftSection={<IconCreditCard size={16} />}
+                    onClick={() => go('/api/billing/checkout', { plan: 'pro' })}
+                    loading={loading === '/api/billing/checkout{"plan":"pro"}'}
+                  >
+                    Get Pro — £49/mo
+                  </Button>
+                </>
               ) : (
                 <Button
                   variant="light"
                   leftSection={<IconExternalLink size={16} />}
                   onClick={() => go('/api/billing/portal')}
-                  loading={loading}
+                  loading={loading !== null}
                 >
                   Manage billing
                 </Button>
@@ -206,27 +267,34 @@ function BillingTab({ billing, isAdmin }: { billing: Billing; isAdmin: boolean }
         </Stack>
       </Paper>
 
-      {/* What's included */}
+      {/* Plan comparison */}
       <Paper withBorder p="md" radius="md">
-        <Text fw={700} mb="sm">What&apos;s included in Pro</Text>
+        <Text fw={700} mb="sm">Plan comparison</Text>
         <Stack gap="xs">
-          {[
-            'Unlimited shipments & customers',
-            'WhatsApp status updates to customers',
-            'Customer tracking page (shareable link)',
-            'Agent portal with destination scoping',
-            'Field intake with photo capture',
-            'PDF shipment receipts (BOL)',
-            'Bulk status updates',
-            'Priority email support',
-          ].map((f) => (
-            <Group key={f} gap="xs">
-              <ThemeIcon size="xs" color="green" variant="light" radius="xl">
-                <IconCheck size={10} />
-              </ThemeIcon>
-              <Text size="sm">{f}</Text>
+          {([
+            ['Shipments/month', '10', '75 + overage', 'Unlimited'],
+            ['WhatsApp updates', '—', '✓', '✓'],
+            ['Tracking page', '—', '✓', '✓'],
+            ['Agent portal', '—', '—', '✓'],
+            ['BOL / PDF receipts', '—', '—', '✓'],
+            ['Multi-destination', '—', '—', '✓'],
+          ] as const).map(([feat, free, starter, pro]) => (
+            <Group key={feat} justify="space-between" wrap="nowrap">
+              <Text size="sm" style={{ flex: 1 }}>{feat}</Text>
+              <Group gap="lg" wrap="nowrap">
+                <Text size="xs" c="dimmed" w={60} ta="center">{free}</Text>
+                <Text size="xs" c="dimmed" w={80} ta="center">{starter}</Text>
+                <Text size="xs" c="dimmed" w={60} ta="center">{pro}</Text>
+              </Group>
             </Group>
           ))}
+          <Group justify="flex-end">
+            <Group gap="lg" wrap="nowrap">
+              <Text size="xs" fw={600} c="gray" w={60} ta="center">Free</Text>
+              <Text size="xs" fw={600} c="teal" w={80} ta="center">Starter £19</Text>
+              <Text size="xs" fw={600} c="green" w={60} ta="center">Pro £49</Text>
+            </Group>
+          </Group>
         </Stack>
       </Paper>
     </Stack>
@@ -351,11 +419,11 @@ export function SettingsClient({
           <Text size="sm" c="dimmed">{org.name}</Text>
         </Stack>
         <Badge
-          color={planLabel(billing?.status ?? 'inactive').color}
+          color={planLabel(billing).color}
           variant="light"
           size="lg"
         >
-          {planLabel(billing?.status ?? 'inactive').label}
+          {planLabel(billing).label}
         </Badge>
       </Group>
 

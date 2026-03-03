@@ -60,13 +60,14 @@ export async function POST(req: Request) {
           session?.metadata?.org_id ?? session?.client_reference_id ?? null;
         const customerId = session?.customer as string | null;
         const subscriptionId = session?.subscription as string | null;
+        const planTier: string = session?.metadata?.plan_tier ?? 'pro';
 
         if (!orgId || !customerId) {
           console.warn('[stripe-webhook] checkout.session.completed: missing org_id or customer');
           break;
         }
 
-        // Retrieve full subscription to get status + period
+        // Retrieve full subscription to get status + period + price
         let status = 'active';
         let periodEnd: string | null = null;
         let priceId: string | null = null;
@@ -75,9 +76,7 @@ export async function POST(req: Request) {
           const sub = await stripe.subscriptions.retrieve(subscriptionId);
           status = String(sub.status).toLowerCase();
           const cpe = (sub as any).current_period_end as number | null | undefined;
-          periodEnd = cpe
-            ? new Date(cpe! * 1000).toISOString()
-            : null;
+          periodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
           priceId = (sub.items.data[0]?.price?.id as string) ?? null;
         }
 
@@ -85,13 +84,16 @@ export async function POST(req: Request) {
           stripe_customer_id: customerId,
           stripe_subscription_id: subscriptionId,
           stripe_price_id: priceId ?? (process.env.STRIPE_PRICE_ID_CORE ?? null),
-          status,                  // ← correct column name
+          status,
           current_period_end: periodEnd,
+          plan_tier: planTier,
+          shipment_count: 0,
+          billing_period_start: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
 
-        console.log(`[stripe-webhook] org ${orgId} activated — status: ${status}`);
-        break; // ← was missing, causing fall-through
+        console.log(`[stripe-webhook] org ${orgId} activated — plan: ${planTier}, status: ${status}`);
+        break;
       }
 
       // ── Subscription updated (renewal, plan change, pause) ────────────────
@@ -107,16 +109,25 @@ export async function POST(req: Request) {
           break;
         }
 
-        await upsertBilling(orgId, {
+        const updatedPriceId = sub.items?.data?.[0]?.price?.id as string | undefined;
+        const updatedPlanTier =
+          updatedPriceId === process.env.STRIPE_PRICE_ID_STARTER ? 'starter'
+          : updatedPriceId === process.env.STRIPE_PRICE_ID_CORE   ? 'pro'
+          : undefined;  // unknown price — don't overwrite plan_tier
+
+        const patch: Record<string, unknown> = {
           stripe_customer_id: sub.customer ?? null,
           stripe_subscription_id: sub.id ?? null,
-          stripe_price_id: (sub.items?.data?.[0]?.price?.id as string) ?? null,
+          stripe_price_id: updatedPriceId ?? null,
           status: String(sub.status ?? 'inactive').toLowerCase(),
           current_period_end: ((sub as any).current_period_end as number | null | undefined)
             ? new Date(((sub as any).current_period_end as number) * 1000).toISOString()
             : null,
           updated_at: new Date().toISOString(),
-        });
+        };
+        if (updatedPlanTier) patch.plan_tier = updatedPlanTier;
+
+        await upsertBilling(orgId, patch);
 
         console.log(`[stripe-webhook] org ${orgId} subscription updated — status: ${sub.status}`);
         break;
@@ -145,6 +156,25 @@ export async function POST(req: Request) {
         });
 
         console.log(`[stripe-webhook] org ${orgId} subscription cancelled`);
+        break;
+      }
+
+      // ── Invoice paid — reset shipment_count for the new billing period ──────
+      case 'invoice.paid': {
+        const invoice = event.data.object as any;
+        const customerId = invoice?.customer as string | null;
+        if (!customerId) break;
+
+        const orgId = await orgIdByCustomer(customerId);
+        if (!orgId) break;
+
+        await upsertBilling(orgId, {
+          shipment_count: 0,
+          billing_period_start: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+
+        console.log(`[stripe-webhook] org ${orgId} invoice paid — shipment_count reset`);
         break;
       }
 
