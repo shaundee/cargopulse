@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import {
   Anchor,
   Badge,
@@ -23,6 +25,7 @@ import {
   IconCheck,
   IconCreditCard,
   IconExternalLink,
+  IconLogout,
   IconMessage,
   IconUser,
 } from '@tabler/icons-react';
@@ -210,54 +213,58 @@ function BillingTab({ billing, isAdmin }: { billing: Billing; isAdmin: boolean }
           {!isActive && (
             <Stack gap="xs">
               <Paper withBorder p="sm" radius="sm" bg="teal.0">
-                <Stack gap={4}>
-                  <Text size="sm" fw={600}>Starter — £19/month</Text>
-                  <Text size="xs" c="dimmed">
-                    75 shipments/month · WhatsApp updates · £0.40/shipment overage
-                  </Text>
-                </Stack>
+                <Group justify="space-between" align="flex-start">
+                  <Stack gap={4} style={{ flex: 1 }}>
+                    <Text size="sm" fw={600}>Starter — £19/month</Text>
+                    <Text size="xs" c="dimmed">
+                      75 shipments/month · WhatsApp updates · £0.40/shipment overage
+                    </Text>
+                  </Stack>
+                  {isAdmin && (
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color="teal"
+                      onClick={() => go('/api/billing/checkout', { plan: 'starter' })}
+                      loading={loading === '/api/billing/checkout{"plan":"starter"}'}
+                    >
+                      Subscribe
+                    </Button>
+                  )}
+                </Group>
               </Paper>
               <Paper withBorder p="sm" radius="sm" bg="blue.0">
-                <Stack gap={4}>
-                  <Text size="sm" fw={600}>Pro — £49/month</Text>
-                  <Text size="xs" c="dimmed">
-                    Unlimited shipments · Agent portal · BOL receipts · Multi-destination
-                  </Text>
-                </Stack>
+                <Group justify="space-between" align="flex-start">
+                  <Stack gap={4} style={{ flex: 1 }}>
+                    <Text size="sm" fw={600}>Pro — £49/month</Text>
+                    <Text size="xs" c="dimmed">
+                      Unlimited shipments · Agent portal · BOL receipts · Multi-destination
+                    </Text>
+                  </Stack>
+                  {isAdmin && (
+                    <Button
+                      size="xs"
+                      onClick={() => go('/api/billing/checkout', { plan: 'pro' })}
+                      loading={loading === '/api/billing/checkout{"plan":"pro"}'}
+                    >
+                      Subscribe
+                    </Button>
+                  )}
+                </Group>
               </Paper>
             </Stack>
           )}
 
-          {isAdmin && (
+          {isAdmin && isActive && (
             <Group>
-              {!isActive ? (
-                <>
-                  <Button
-                    variant="light"
-                    leftSection={<IconCreditCard size={16} />}
-                    onClick={() => go('/api/billing/checkout', { plan: 'starter' })}
-                    loading={loading === '/api/billing/checkout{"plan":"starter"}'}
-                  >
-                    Get Starter — £19/mo
-                  </Button>
-                  <Button
-                    leftSection={<IconCreditCard size={16} />}
-                    onClick={() => go('/api/billing/checkout', { plan: 'pro' })}
-                    loading={loading === '/api/billing/checkout{"plan":"pro"}'}
-                  >
-                    Get Pro — £49/mo
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  variant="light"
-                  leftSection={<IconExternalLink size={16} />}
-                  onClick={() => go('/api/billing/portal')}
-                  loading={loading !== null}
-                >
-                  Manage billing
-                </Button>
-              )}
+              <Button
+                variant="light"
+                leftSection={<IconExternalLink size={16} />}
+                onClick={() => go('/api/billing/portal')}
+                loading={loading !== null}
+              >
+                Manage billing
+              </Button>
             </Group>
           )}
 
@@ -366,6 +373,16 @@ function MessagingTab({
 // ─── Account Tab ─────────────────────────────────────────────────────────────
 
 function AccountTab({ userEmail, userRole }: { userEmail: string; userRole: string }) {
+  const router = useRouter();
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function signOut() {
+    setSigningOut(true);
+    const supabase = createSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    router.push('/login');
+  }
+
   return (
     <Stack gap="md">
       <Paper withBorder p="md" radius="md">
@@ -383,6 +400,18 @@ function AccountTab({ userEmail, userRole }: { userEmail: string; userRole: stri
           <Group justify="space-between">
             <Text size="sm" c="dimmed">Role</Text>
             <Badge variant="light">{userRole}</Badge>
+          </Group>
+          <Divider />
+          <Group>
+            <Button
+              variant="subtle"
+              color="red"
+              leftSection={<IconLogout size={16} />}
+              onClick={signOut}
+              loading={signingOut}
+            >
+              Sign out
+            </Button>
           </Group>
         </Stack>
       </Paper>
@@ -413,19 +442,10 @@ export function SettingsClient({
 }) {
   return (
     <Stack gap="md">
-      <Group justify="space-between">
-        <Stack gap={2}>
-          <Title order={3}>Settings</Title>
-          <Text size="sm" c="dimmed">{org.name}</Text>
-        </Stack>
-        <Badge
-          color={planLabel(billing).color}
-          variant="light"
-          size="lg"
-        >
-          {planLabel(billing).label}
-        </Badge>
-      </Group>
+      <Stack gap={2}>
+        <Title order={3}>Settings</Title>
+        <Text size="sm" c="dimmed">{org.name}</Text>
+      </Stack>
 
       <Tabs defaultValue="org" keepMounted={false}>
         <Tabs.List>
