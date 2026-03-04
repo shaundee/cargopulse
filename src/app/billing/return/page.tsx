@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Center, Loader, Stack, Text } from '@mantine/core';
 
-export default function BillingReturnPage() {
+function BillingReturnInner() {
   const sp = useSearchParams();
   const status = sp.get('status') ?? 'success';
 
@@ -28,5 +28,13 @@ export default function BillingReturnPage() {
         </Text>
       </Stack>
     </Center>
+  );
+}
+
+export default function BillingReturnPage() {
+  return (
+    <Suspense fallback={<Center mih="60vh"><Loader /></Center>}>
+      <BillingReturnInner />
+    </Suspense>
   );
 }
