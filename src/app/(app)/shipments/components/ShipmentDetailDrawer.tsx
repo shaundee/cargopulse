@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Badge,
   Drawer,
   Group,
   Image,
@@ -13,6 +14,13 @@ import {
   Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import {
+  IconCheck,
+  IconCopy,
+  IconPhone,
+  IconPrinter,
+  IconX,
+} from '@tabler/icons-react';
 
 import type {
   MessageLogRow,
@@ -21,20 +29,52 @@ import type {
   ShipmentStatus,
   TemplateRow,
 } from '../shipment-types';
-import { getExistingPod } from '../shipment-types';
+import { getExistingPod, statusBadgeColor, statusLabel } from '../shipment-types';
 
-import { ShipmentSummaryCard } from './ShipmentSummaryCard';
 import { StatusUpdateCard } from './StatusUpdateCard';
 import { MessageHistoryCard } from './MessageHistoryCard';
 import { PodCard } from './PodCard';
 import { TimelineCard } from './TimelineCard';
 
-type DrawerTab = 'logistics' | 'cargo' | 'proof';
+type DrawerTab = 'timeline' | 'cargo' | 'proof';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const DESTINATION_FLAG: Record<string, string> = {
+  jamaica: '🇯🇲',
+  uk: '🇬🇧',
+  'united kingdom': '🇬🇧',
+  ghana: '🇬🇭',
+  nigeria: '🇳🇬',
+  usa: '🇺🇸',
+  'united states': '🇺🇸',
+  canada: '🇨🇦',
+  barbados: '🇧🇧',
+  trinidad: '🇹🇹',
+  'trinidad and tobago': '🇹🇹',
+  guyana: '🇬🇾',
+  'sierra leone': '🇸🇱',
+  cameroon: '🇨🇲',
+  kenya: '🇰🇪',
+};
+
+function destFlag(dest: string | null | undefined) {
+  if (!dest) return '';
+  return DESTINATION_FLAG[dest.toLowerCase()] ?? '';
+}
+
+function serviceLabel(s: string | null | undefined) {
+  if (s === 'door_to_door') return 'Door to Door';
+  if (s === 'depot') return 'Depot';
+  return s ?? '';
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export function ShipmentDetailDrawer({
   opened,
   shipmentId,
-  initialTab = 'logistics',
+  initialTab = 'timeline',
   onClose,
   onReloadRequested,
 }: {
@@ -49,7 +89,7 @@ export function ShipmentDetailDrawer({
 
   useEffect(() => {
     if (!opened) return;
-    setTab(initialTab ?? 'logistics');
+    setTab(initialTab ?? 'timeline');
   }, [opened, shipmentId, initialTab]);
 
   // Data
@@ -60,10 +100,9 @@ export function ShipmentDetailDrawer({
   const [detailLogsLoading, setDetailLogsLoading] = useState(false);
 
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [destEnabledStatuses, setDestEnabledStatuses] = useState<string[]>([]);
 
-  // Status update form state
-  const [eventStatus, setEventStatus] = useState<ShipmentStatus>('received');
-  const [eventNote, setEventNote] = useState('');
+  // Status update saving state (StatusUpdateCard manages its own pending/note)
   const [eventSaving, setEventSaving] = useState(false);
 
   // POD
@@ -75,7 +114,23 @@ export function ShipmentDetailDrawer({
   const [assets, setAssets] = useState<Array<{ id: string; kind: string; url: string | null; created_at: string }>>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
 
+  // Header actions
+  const [origin, setOrigin] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => { setOrigin(window.location.origin); }, []);
+
   const existingPod = useMemo(() => getExistingPod(detailShipment), [detailShipment]);
+
+  const token = detailShipment?.public_tracking_token;
+  const trackingLink = token && origin ? `${origin}/t/${token}` : '';
+
+  function copyLink() {
+    if (!trackingLink) return;
+    navigator.clipboard.writeText(trackingLink).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
 
   // ----------------------------
   // Loaders
@@ -131,7 +186,6 @@ export function ShipmentDetailDrawer({
     setDetailEvents([]);
     setDetailLogs([]);
     setTemplates([]);
-    setEventNote('');
     setPodReceiver('');
     setPodFile(null);
 
@@ -147,13 +201,22 @@ export function ShipmentDetailDrawer({
 
       setDetailShipment(payload.shipment);
       setDetailEvents(payload.events ?? []);
-      setEventStatus((payload.shipment?.current_status ?? 'received') as ShipmentStatus);
 
-      // Load “side” data in parallel (logs, templates, assets)
+      // Load "side" data in parallel (logs, templates, assets, destination enabled statuses)
+      const destName: string = payload.shipment?.destination ?? '';
       await Promise.all([
         loadLogs(id),
         loadTemplates(),
         loadAssets(id),
+        fetch('/api/destinations', { cache: 'no-store' })
+          .then((r) => r.json())
+          .then((j) => {
+            const dest = (j.destinations ?? []).find(
+              (d: any) => String(d.name).toLowerCase() === destName.toLowerCase()
+            );
+            setDestEnabledStatuses(dest?.enabled_statuses ?? []);
+          })
+          .catch(() => setDestEnabledStatuses([])),
       ]);
     } catch (e: any) {
       notifications.show({
@@ -178,21 +241,28 @@ export function ShipmentDetailDrawer({
   // Actions
   // ----------------------------
 
-  async function addEvent(opts?: { sendUpdate?: boolean; templateId?: string | null }) {
+  async function addEvent({
+    status,
+    sendUpdate,
+    templateId,
+    note,
+  }: {
+    status: ShipmentStatus;
+    sendUpdate: boolean;
+    templateId: string | null;
+    note: string;
+  }) {
     if (!detailShipment?.id) return;
 
     setEventSaving(true);
     try {
-      const sendUpdate = Boolean(opts?.sendUpdate ?? false);
-      const templateId = (opts?.templateId ?? null) ? String(opts?.templateId) : null;
-
       const res = await fetch('/api/shipments/events/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           shipmentId: detailShipment.id,
-          status: eventStatus,
-          note: eventNote || null,
+          status,
+          note: note || null,
           autoLog: sendUpdate,
           templateId,
         }),
@@ -208,7 +278,6 @@ export function ShipmentDetailDrawer({
 
       notifications.show({ title: 'Status updated', message: 'Timeline updated', color: 'green' });
 
-      // Surface message outcome (sent/logged/skipped/failed)
       if (sendUpdate && isJson) {
         const m = payload?.auto_message;
         if (m?.skipped) {
@@ -266,7 +335,7 @@ export function ShipmentDetailDrawer({
   }
 
   // ----------------------------
-  // Render helpers
+  // Panel sub-components
   // ----------------------------
 
   function CargoDetailsPanel({ shipment }: { shipment: ShipmentDetail }) {
@@ -341,12 +410,11 @@ export function ShipmentDetailDrawer({
             ) : null}
           </Stack>
         </Paper>
-
       </Stack>
     );
   }
 
-  function ProofPanel({ shipment }: { shipment: ShipmentDetail }) {
+  function ProofPanel({ shipment: _shipment }: { shipment: ShipmentDetail }) {
     return (
       <Stack gap="sm">
         <PodCard
@@ -394,6 +462,94 @@ export function ShipmentDetailDrawer({
   }
 
   // ----------------------------
+  // Custom Drawer header
+  // ----------------------------
+
+  const iconBtn: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 30, height: 30, borderRadius: 7,
+    background: '#f3f4f6', color: '#374151',
+    border: 'none', cursor: 'pointer', flexShrink: 0,
+    transition: 'background 0.1s',
+  };
+
+  const drawerTitle = (
+    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', width: '100%', gap: 8 }}>
+      {/* Left: customer name + status + subtitle */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, fontSize: 17, lineHeight: 1.2, color: '#111827' }}>
+            {detailShipment?.customers?.name ?? (detailLoading ? '…' : 'Shipment')}
+          </span>
+          {detailShipment && (
+            <Badge
+              color={statusBadgeColor(detailShipment.current_status as ShipmentStatus)}
+              variant="light"
+              size="sm"
+            >
+              {statusLabel(detailShipment.current_status as ShipmentStatus, detailShipment.destination)}
+            </Badge>
+          )}
+        </div>
+        {detailShipment && (
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 3, lineHeight: 1.4 }}>
+            {detailShipment.tracking_code}
+            {detailShipment.destination
+              ? ` · ${detailShipment.destination} ${destFlag(detailShipment.destination)}`
+              : ''}
+            {detailShipment.service_type
+              ? ` · ${serviceLabel(detailShipment.service_type)}`
+              : ''}
+          </div>
+        )}
+      </div>
+
+      {/* Right: action icon buttons */}
+      <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexShrink: 0, marginTop: 2 }}>
+        {/* Phone */}
+        {detailShipment?.customers?.phone && (
+          <a
+            href={`tel:${detailShipment.customers.phone}`}
+            title="Call customer"
+            style={{ ...iconBtn, background: '#f0fdf4', color: '#16a34a', textDecoration: 'none' }}
+          >
+            <IconPhone size={14} />
+          </a>
+        )}
+
+        {/* Copy tracking link */}
+        <button
+          onClick={copyLink}
+          disabled={!trackingLink}
+          title="Copy tracking link"
+          style={{ ...iconBtn, opacity: trackingLink ? 1 : 0.4 }}
+        >
+          {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+        </button>
+
+        {/* Print BOL */}
+        <button
+          onClick={() => detailShipment && window.open(`/shipments/print/${detailShipment.id}`, '_blank')}
+          disabled={!detailShipment}
+          title="Print BOL"
+          style={{ ...iconBtn, opacity: detailShipment ? 1 : 0.4 }}
+        >
+          <IconPrinter size={14} />
+        </button>
+
+        {/* Close */}
+        <button
+          onClick={onClose}
+          title="Close"
+          style={iconBtn}
+        >
+          <IconX size={14} />
+        </button>
+      </div>
+    </div>
+  );
+
+  // ----------------------------
   // Render
   // ----------------------------
 
@@ -403,7 +559,8 @@ export function ShipmentDetailDrawer({
       onClose={onClose}
       position="right"
       size="lg"
-      title={detailShipment ? `Shipment ${detailShipment.tracking_code}` : 'Shipment'}
+      withCloseButton={false}
+      title={drawerTitle}
     >
       {detailLoading ? (
         <Text c="dimmed">Loading…</Text>
@@ -416,32 +573,25 @@ export function ShipmentDetailDrawer({
         </Paper>
       ) : (
         <Stack gap="sm">
-          {/* Keep a compact summary at top (fast context) */}
-          <ShipmentSummaryCard detailShipment={detailShipment} onReloadRequested={onReloadRequested} />
-
-          <Tabs value={tab} onChange={(v) => setTab((v as DrawerTab) ?? 'logistics')} keepMounted={false}>
+          <Tabs value={tab} onChange={(v) => setTab((v as DrawerTab) ?? 'timeline')} keepMounted={false}>
             <Tabs.List>
-              <Tabs.Tab value="logistics">Logistics</Tabs.Tab>
-              <Tabs.Tab value="cargo">Cargo</Tabs.Tab>
-              <Tabs.Tab value="proof">Proof</Tabs.Tab>
+              <Tabs.Tab value="timeline">Timeline</Tabs.Tab>
+              <Tabs.Tab value="cargo">Cargo details</Tabs.Tab>
+              <Tabs.Tab value="proof">Proof of delivery</Tabs.Tab>
             </Tabs.List>
 
-            <Tabs.Panel value="logistics" pt="sm">
+            <Tabs.Panel value="timeline" pt="sm">
               <Stack gap="sm">
                 <StatusUpdateCard
                   currentStatus={detailShipment.current_status as ShipmentStatus}
-                  eventStatus={eventStatus}
-                  setEventStatus={setEventStatus}
-                  eventNote={eventNote}
-                  setEventNote={setEventNote}
                   templates={templates}
                   customerName={detailShipment.customers?.name ?? ''}
                   trackingCode={detailShipment.tracking_code}
                   destination={detailShipment.destination ?? ''}
                   publicTrackingToken={detailShipment.public_tracking_token ?? null}
+                  enabledStatuses={destEnabledStatuses}
                   onSave={addEvent}
                   saving={eventSaving}
-                  stickyPrimaryAction
                 />
 
                 <TimelineCard

@@ -33,8 +33,11 @@ export async function GET(req: Request) {
   });
 
   if (verifyErr) {
+    const msg = /expired|invalid/i.test(verifyErr.message)
+      ? 'This invite link has expired or has already been used. Ask your admin to send a new one.'
+      : verifyErr.message;
     return NextResponse.redirect(
-      new URL(`/login?error=${encodeURIComponent(verifyErr.message)}`, baseUrl)
+      new URL(`/login?error=${encodeURIComponent(msg)}`, baseUrl)
     );
   }
 
@@ -66,6 +69,9 @@ export async function GET(req: Request) {
 
       if (expired) {
         await admin.from('org_agent_invites').update({ status: 'expired' }).eq('id', invite.id);
+        return NextResponse.redirect(
+          new URL(`/login?error=${encodeURIComponent('Your invite link has expired. Ask your admin to send a new one.')}`, baseUrl)
+        );
       } else if (tokenMatches && invite.status === 'pending') {
         // IMPORTANT: do NOT "upsert" role=agent into org_members (could overwrite staff/admin).
         // Insert membership if missing; ignore duplicate.
@@ -102,10 +108,13 @@ export async function GET(req: Request) {
           .eq('id', invite.id);
 
         agentMode = true;
-      } else if (tokenMatches && invite.status === 'accepted') {
-        // If already accepted, still treat this session as agent-mode
-        agentMode = true;
+        // Note: a re-click of this link will fail at verifyOtp (token is one-time-use),
+        // so the 'accepted' status is never reached via this code path.
       }
+    } else {
+      return NextResponse.redirect(
+        new URL(`/login?error=${encodeURIComponent('Invalid invite link. Ask your admin to send a new one.')}`, baseUrl)
+      );
     }
   }
 

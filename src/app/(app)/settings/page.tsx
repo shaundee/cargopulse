@@ -18,7 +18,7 @@ export default async function SettingsPage() {
 
   const { data: org } = await supabase
     .from('organizations')
-    .select('id, name, support_phone, logo_url')
+    .select('id, name, support_phone, logo_url, origin_country')
     .eq('id', member.org_id)
     .maybeSingle();
 
@@ -42,7 +42,7 @@ export default async function SettingsPage() {
 
   return (
     <SettingsClient
-      org={org ?? { id: member.org_id, name: '', support_phone: '', logo_url: null }}
+      org={org ?? { id: member.org_id, name: '', support_phone: '', logo_url: null, origin_country: null }}
       billing={billing ?? null}
       templateCount={(templates ?? []).length}
       miscTemplateCount={(miscTemplates ?? []).length}

@@ -36,14 +36,6 @@ if (blocked) return blocked;
     if (!shipmentId) return NextResponse.json({ error: 'shipmentId is required' }, { status: 400 });
     if (!eventStatus) return NextResponse.json({ error: 'status is required' }, { status: 400 });
 
-    // delivered is set by POD capture, not manual status updates
-    if (isDelivered(eventStatus)) {
-      return NextResponse.json(
-        { error: 'Delivered is set via POD capture. Use Proof of Delivery.' },
-        { status: 400 }
-      );
-    }
-
     // Load shipment + customer
     const { data: shipment, error: shipErr } = await supabase
       .from('shipments')
@@ -64,13 +56,20 @@ if (blocked) return blocked;
     }
 
     // 1) Atomic: insert event + update shipment status
-    const { data, error } = await supabase.rpc('add_shipment_event', {
-      p_shipment_id: shipmentId,
-      p_status: eventStatus,
-      p_note: note,
-    });
+    //    Skip if the status hasn't changed — avoids duplicate events when the
+    //    user re-selects the current status just to trigger a WhatsApp send.
+    const statusChanged = eventStatus !== String((shipment as any).current_status ?? '');
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    let data: any = null;
+    if (statusChanged) {
+      const { data: rpcData, error } = await supabase.rpc('add_shipment_event', {
+        p_shipment_id: shipmentId,
+        p_status: eventStatus,
+        p_note: note,
+      });
+      if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      data = rpcData;
+    }
 
     // 2) Optional: auto-log/send message using template for this status
     let auto_message: any = null;

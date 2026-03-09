@@ -6,9 +6,18 @@ export type ShipmentStatus =
   | 'loaded'
   | 'departed_uk'
   | 'arrived_destination'
+  | 'customs_processing'
+  | 'customs_cleared'
+  | 'awaiting_collection'
   | 'collected_by_customer'
   | 'out_for_delivery'
   | 'delivered';
+
+export const OPTIONAL_STATUSES: ShipmentStatus[] = [
+  'customs_processing',
+  'customs_cleared',
+  'awaiting_collection',
+];
 
 // Stable ordering for UI sorting (optional)
 export const statusOrder: ShipmentStatus[] = [
@@ -17,6 +26,9 @@ export const statusOrder: ShipmentStatus[] = [
   'loaded',
   'departed_uk',
   'arrived_destination',
+  'customs_processing',
+  'customs_cleared',
+  'awaiting_collection',
   'collected_by_customer',
   'out_for_delivery',
   'delivered',
@@ -48,9 +60,8 @@ export type ShipmentRow = {
 }
 
 export type NewShipmentForm = {
- customerName: string;
+  customerName: string;
   phone: string;
-  phoneCountry: 'GB' | 'JM' | 'US' | 'CA';
   destination: string;
   serviceType: 'depot' | 'door_to_door';
 };
@@ -127,8 +138,14 @@ export function statusLabel(status: ShipmentStatus, destination?: string | null)
     case 'departed_uk':
       return 'Departed UK';
     case 'arrived_destination':
-     return destination ? `Arrived (${destination})` : 'Arrived (destination)';
-      case 'collected_by_customer':
+      return destination ? `Arrived (${destination})` : 'Arrived (destination)';
+    case 'customs_processing':
+      return 'Customs processing';
+    case 'customs_cleared':
+      return 'Customs cleared';
+    case 'awaiting_collection':
+      return 'Awaiting collection';
+    case 'collected_by_customer':
       return 'Collected by customer';
     case 'out_for_delivery':
       return 'Out for delivery';
@@ -139,28 +156,37 @@ export function statusLabel(status: ShipmentStatus, destination?: string | null)
 
 export function statusBadgeColor(status: ShipmentStatus): MantineColor {
   switch (status) {
-    case 'delivered':
-      return 'green';
-    case 'out_for_delivery':
-      return 'teal';
-    case 'arrived_destination':
-      return 'cyan';
-       case 'collected_by_customer':
-      return 'green';
-    case 'departed_uk':
-      return 'blue';
-    case 'loaded':
-      return 'indigo';
-    case 'collected':
-      return 'grape';
-    default:
-      return 'gray';
+    case 'delivered':             return 'green';
+    case 'collected_by_customer': return 'green';
+    case 'out_for_delivery':      return 'orange';
+    case 'arrived_destination':   return 'teal';
+    case 'customs_processing':    return 'yellow';
+    case 'customs_cleared':       return 'lime';
+    case 'awaiting_collection':   return 'cyan';
+    case 'departed_uk':           return 'violet';
+    case 'loaded':                return 'blue';
+    case 'collected':             return 'gray';
+    default:                      return 'gray'; // received
   }
 }
 
 export function formatWhen(v: unknown) {
   const d = v ? new Date(String(v)) : null;
-  return d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : '-';
+  if (!d || Number.isNaN(d.getTime())) return '-';
+
+  const now = Date.now();
+  const diffMs = now - d.getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+  const diffHr  = Math.floor(diffMs / 3_600_000);
+  const diffDay = Math.floor(diffMs / 86_400_000);
+
+  if (diffMin < 1)  return 'Just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHr  < 24) return `${diffHr}h ago`;
+  if (diffDay === 1) return 'Yesterday';
+  if (diffDay < 7)  return `${diffDay} days ago`;
+
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
 export function getExistingPod(detailShipment: ShipmentDetail | null): PodRow | null {

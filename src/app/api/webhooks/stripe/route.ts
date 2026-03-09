@@ -5,6 +5,52 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 
+function planTierFromPriceIds(priceIds: string[]): string | undefined {
+  const ids = priceIds.filter(Boolean);
+
+  if (process.env.STRIPE_PRICE_ID_PAUSE && ids.includes(process.env.STRIPE_PRICE_ID_PAUSE)) {
+    return 'pause';
+  }
+  if (
+    (process.env.STRIPE_PRICE_ID_FLEX && ids.includes(process.env.STRIPE_PRICE_ID_FLEX)) ||
+    (process.env.STRIPE_METERED_PRICE_ID_FLEX && ids.includes(process.env.STRIPE_METERED_PRICE_ID_FLEX))
+  ) {
+    return 'flex';
+  }
+  if (
+    (process.env.STRIPE_PRICE_ID_PRO && ids.includes(process.env.STRIPE_PRICE_ID_PRO)) ||
+    (process.env.STRIPE_METERED_PRICE_ID_PRO && ids.includes(process.env.STRIPE_METERED_PRICE_ID_PRO))
+  ) {
+    return 'pro';
+  }
+  if (
+    (process.env.STRIPE_PRICE_ID_STARTER && ids.includes(process.env.STRIPE_PRICE_ID_STARTER)) ||
+    (process.env.STRIPE_METERED_PRICE_ID_STARTER && ids.includes(process.env.STRIPE_METERED_PRICE_ID_STARTER))
+  ) {
+    return 'starter';
+  }
+
+  return undefined;
+}
+
+function primaryPriceId(priceIds: string[]): string | null {
+  const preferred = [
+    process.env.STRIPE_PRICE_ID_PAUSE,
+    process.env.STRIPE_PRICE_ID_FLEX,
+    process.env.STRIPE_PRICE_ID_PRO,
+    process.env.STRIPE_PRICE_ID_STARTER,
+    process.env.STRIPE_METERED_PRICE_ID_FLEX,
+    process.env.STRIPE_METERED_PRICE_ID_PRO,
+    process.env.STRIPE_METERED_PRICE_ID_STARTER,
+  ].filter(Boolean) as string[];
+
+  for (const id of preferred) {
+    if (priceIds.includes(id)) return id;
+  }
+
+  return priceIds[0] ?? null;
+}
+
 // Webhook must consume the raw body — no JSON parsing before constructEvent
 export async function POST(req: Request) {
   const sig = (await headers()).get('stripe-signature');
@@ -26,8 +72,6 @@ export async function POST(req: Request) {
 
   const supabase = createSupabaseAdminClient();
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
-
   async function upsertBilling(orgId: string, patch: Record<string, unknown>) {
     const { error } = await supabase
       .from('organization_billing')
@@ -45,14 +89,10 @@ export async function POST(req: Request) {
     return data?.org_id ?? null;
   }
 
-  // ── Handler ──────────────────────────────────────────────────────────────────
-
   try {
     console.log(`[stripe-webhook] received: ${event.type}`);
 
     switch (event.type) {
-
-      // ── New subscription created via Checkout ─────────────────────────────
       case 'checkout.session.completed': {
         const session = event.data.object as any;
 
@@ -60,30 +100,33 @@ export async function POST(req: Request) {
           session?.metadata?.org_id ?? session?.client_reference_id ?? null;
         const customerId = session?.customer as string | null;
         const subscriptionId = session?.subscription as string | null;
-        const planTier: string = session?.metadata?.plan_tier ?? 'pro';
 
         if (!orgId || !customerId) {
           console.warn('[stripe-webhook] checkout.session.completed: missing org_id or customer');
           break;
         }
 
-        // Retrieve full subscription to get status + period + price
         let status = 'active';
         let periodEnd: string | null = null;
         let priceId: string | null = null;
+        let planTier: string = session?.metadata?.plan_tier ?? 'pro';
 
         if (subscriptionId) {
           const sub = await stripe.subscriptions.retrieve(subscriptionId);
           status = String(sub.status).toLowerCase();
           const cpe = (sub as any).current_period_end as number | null | undefined;
           periodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
-          priceId = (sub.items.data[0]?.price?.id as string) ?? null;
+          const priceIds = (sub.items.data ?? [])
+            .map((item: any) => item?.price?.id)
+            .filter(Boolean) as string[];
+          priceId = primaryPriceId(priceIds);
+          planTier = planTierFromPriceIds(priceIds) ?? planTier;
         }
 
         await upsertBilling(orgId, {
           stripe_customer_id: customerId,
           stripe_subscription_id: subscriptionId,
-          stripe_price_id: priceId ?? (process.env.STRIPE_PRICE_ID_CORE ?? null),
+          stripe_price_id: priceId ?? null,
           status,
           current_period_end: periodEnd,
           plan_tier: planTier,
@@ -96,7 +139,6 @@ export async function POST(req: Request) {
         break;
       }
 
-      // ── Subscription updated (renewal, plan change, pause) ────────────────
       case 'customer.subscription.updated': {
         const sub = event.data.object as any;
 
@@ -109,16 +151,15 @@ export async function POST(req: Request) {
           break;
         }
 
-        const updatedPriceId = sub.items?.data?.[0]?.price?.id as string | undefined;
-        const updatedPlanTier =
-          updatedPriceId === process.env.STRIPE_PRICE_ID_STARTER ? 'starter'
-          : updatedPriceId === process.env.STRIPE_PRICE_ID_CORE   ? 'pro'
-          : undefined;  // unknown price — don't overwrite plan_tier
+        const priceIds = (sub.items?.data ?? [])
+          .map((item: any) => item?.price?.id)
+          .filter(Boolean) as string[];
+        const updatedPlanTier = planTierFromPriceIds(priceIds);
 
         const patch: Record<string, unknown> = {
           stripe_customer_id: sub.customer ?? null,
           stripe_subscription_id: sub.id ?? null,
-          stripe_price_id: updatedPriceId ?? null,
+          stripe_price_id: primaryPriceId(priceIds),
           status: String(sub.status ?? 'inactive').toLowerCase(),
           current_period_end: ((sub as any).current_period_end as number | null | undefined)
             ? new Date(((sub as any).current_period_end as number) * 1000).toISOString()
@@ -133,7 +174,6 @@ export async function POST(req: Request) {
         break;
       }
 
-      // ── Subscription cancelled / expired ──────────────────────────────────
       case 'customer.subscription.deleted': {
         const sub = event.data.object as any;
 
@@ -146,20 +186,18 @@ export async function POST(req: Request) {
           break;
         }
 
-        await upsertBilling(orgId, {
-          stripe_subscription_id: sub.id ?? null,
-          status: 'canceled',
-          current_period_end: ((sub as any).current_period_end as number | null | undefined)
-            ? new Date(((sub as any).current_period_end as number) * 1000).toISOString()
-            : null,
-          updated_at: new Date().toISOString(),
-        });
-
+  await upsertBilling(orgId, {
+  stripe_subscription_id: null,
+  stripe_price_id: null,
+  status: 'inactive',
+  plan_tier: 'free',
+  current_period_end: null,
+  updated_at: new Date().toISOString(),
+});
         console.log(`[stripe-webhook] org ${orgId} subscription cancelled`);
         break;
       }
 
-      // ── Invoice paid — reset shipment_count for the new billing period ──────
       case 'invoice.paid': {
         const invoice = event.data.object as any;
         const customerId = invoice?.customer as string | null;
@@ -178,7 +216,6 @@ export async function POST(req: Request) {
         break;
       }
 
-      // ── Payment failed (dunning) ──────────────────────────────────────────
       case 'invoice.payment_failed': {
         const invoice = event.data.object as any;
         const customerId = invoice?.customer as string | null;
@@ -197,7 +234,6 @@ export async function POST(req: Request) {
       }
 
       default:
-        // Ignored event type — still return 200 so Stripe doesn't retry
         break;
     }
   } catch (e: any) {

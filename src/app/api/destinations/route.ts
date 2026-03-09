@@ -23,7 +23,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from('org_destinations')
-    .select('id, name, active, sort_order')
+    .select('id, name, active, sort_order, enabled_statuses')
     .eq('org_id', mem.org_id)
     .eq('active', true)
     .order('sort_order', { ascending: true })
@@ -84,4 +84,46 @@ export async function POST(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   return NextResponse.json({ ok: true, destination: data });
+}
+
+export async function PATCH(req: Request) {
+  const blocked = await blockIfAgentMode();
+  if (blocked) return blocked;
+  const supabase = await createSupabaseServerClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const body = await req.json().catch(() => null);
+  const id = String(body?.id ?? '').trim();
+  const enabledStatuses: unknown = body?.enabled_statuses;
+
+  if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
+  if (!Array.isArray(enabledStatuses)) return NextResponse.json({ error: 'enabled_statuses must be an array' }, { status: 400 });
+
+  const OPTIONAL = ['customs_processing', 'customs_cleared', 'awaiting_collection'];
+  const invalid = enabledStatuses.filter((s) => !OPTIONAL.includes(String(s)));
+  if (invalid.length > 0) {
+    return NextResponse.json({ error: `Invalid status values: ${invalid.join(', ')}` }, { status: 400 });
+  }
+
+  const { data: mem, error: memErr } = await supabase
+    .from('org_members')
+    .select('org_id')
+    .eq('user_id', user.id)
+    .limit(1)
+    .maybeSingle();
+
+  if (memErr) return NextResponse.json({ error: memErr.message }, { status: 400 });
+  if (!mem?.org_id) return NextResponse.json({ error: 'No org membership' }, { status: 400 });
+
+  const { error } = await supabase
+    .from('org_destinations')
+    .update({ enabled_statuses: enabledStatuses })
+    .eq('id', id)
+    .eq('org_id', mem.org_id);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  return NextResponse.json({ ok: true });
 }

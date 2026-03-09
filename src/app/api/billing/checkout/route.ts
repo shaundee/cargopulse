@@ -6,6 +6,14 @@ import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 
 export const runtime = 'nodejs';
 
+type CheckoutPlan = 'starter' | 'pro' | 'flex' | 'pause';
+
+function resolveRequestedPlan(raw: unknown): CheckoutPlan {
+  const plan = String(raw ?? 'pro').toLowerCase();
+  if (plan === 'starter' || plan === 'flex' || plan === 'pause') return plan;
+  return 'pro';
+}
+
 export async function POST(req: Request) {
   const blocked = await blockIfAgentMode();
   if (blocked) return blocked;
@@ -14,8 +22,7 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const reqBody = await req.json().catch(() => ({}));
-  const plan: 'starter' | 'pro' =
-    String(reqBody?.plan ?? 'pro') === 'starter' ? 'starter' : 'pro';
+  const plan = resolveRequestedPlan(reqBody?.plan);
 
   const { data: membership } = await supabase
     .from('org_members')
@@ -34,41 +41,94 @@ export async function POST(req: Request) {
     .eq('org_id', orgId)
     .maybeSingle();
 
-  let customerId = billing?.stripe_customer_id ?? null;
+let customerId = billing?.stripe_customer_id ?? null;
 
-  if (!customerId) {
-    const customer = await stripe.customers.create({
-      metadata: { org_id: orgId, user_id: user.id },
-    });
-    customerId = customer.id;
-
-    await supabase.from('organization_billing').upsert(
-      { org_id: orgId, stripe_customer_id: customerId, status: 'inactive' },
-      { onConflict: 'org_id' }
-    );
+if (customerId) {
+  try {
+    const existing = await stripe.customers.retrieve(customerId);
+    if ('deleted' in existing && existing.deleted) {
+      customerId = null;
+    }
+  } catch {
+    customerId = null;
   }
+}
+
+if (!customerId) {
+  const customer = await stripe.customers.create({
+    metadata: { org_id: orgId, user_id: user.id },
+  });
+  customerId = customer.id;
+
+  await supabase.from('organization_billing').upsert(
+    {
+      org_id: orgId,
+      stripe_customer_id: customerId,
+      stripe_subscription_id: null,
+      stripe_price_id: null,
+      status: 'inactive',
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'org_id' }
+  );
+}
+
+if (!customerId) {
+  const customer = await stripe.customers.create({
+    metadata: { org_id: orgId, user_id: user.id },
+  });
+  customerId = customer.id;
+
+  await supabase.from('organization_billing').upsert(
+    { org_id: orgId, stripe_customer_id: customerId, status: 'inactive' },
+    { onConflict: 'org_id' }
+  );
+}
 
   const baseUrl =
     (process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : null) ??
     getBaseUrlFromHeaders(new Headers(req.headers));
 
   let lineItems: { price: string; quantity?: number }[];
+
   if (plan === 'starter') {
     const flatPrice = process.env.STRIPE_PRICE_ID_STARTER;
     const meteredPrice = process.env.STRIPE_METERED_PRICE_ID_STARTER;
-    if (!flatPrice || !meteredPrice)
+    if (!flatPrice || !meteredPrice) {
       return NextResponse.json({ error: 'Starter prices not configured (STRIPE_PRICE_ID_STARTER / STRIPE_METERED_PRICE_ID_STARTER)' }, { status: 500 });
+    }
     lineItems = [
       { price: flatPrice, quantity: 1 },
-      { price: meteredPrice },  // metered — no quantity
+      { price: meteredPrice },
+    ];
+  } else if (plan === 'pro') {
+    const proPrice = process.env.STRIPE_PRICE_ID_PRO;
+    if (!proPrice) {
+      return NextResponse.json({ error: 'Missing STRIPE_PRICE_ID_PRO' }, { status: 500 });
+    }
+
+    const proMeteredPrice = process.env.STRIPE_METERED_PRICE_ID_PRO;
+    lineItems = [{ price: proPrice, quantity: 1 }];
+    if (proMeteredPrice) lineItems.push({ price: proMeteredPrice });
+  } else if (plan === 'flex') {
+    const flatPrice = process.env.STRIPE_PRICE_ID_FLEX;
+    const meteredPrice = process.env.STRIPE_METERED_PRICE_ID_FLEX;
+    if (!flatPrice || !meteredPrice) {
+      return NextResponse.json({ error: 'Flex prices not configured (STRIPE_PRICE_ID_FLEX / STRIPE_METERED_PRICE_ID_FLEX)' }, { status: 500 });
+    }
+    lineItems = [
+      { price: flatPrice, quantity: 1 },
+      { price: meteredPrice },
     ];
   } else {
-    const proPrice = process.env.STRIPE_PRICE_ID_CORE;
-    if (!proPrice)
-      return NextResponse.json({ error: 'Missing STRIPE_PRICE_ID_CORE' }, { status: 500 });
-    lineItems = [{ price: proPrice, quantity: 1 }];
+    const pausePrice = process.env.STRIPE_PRICE_ID_PAUSE;
+    if (!pausePrice) {
+      return NextResponse.json({ error: 'Pause price not configured (STRIPE_PRICE_ID_PAUSE)' }, { status: 500 });
+    }
+    lineItems = [{ price: pausePrice, quantity: 1 }];
   }
 
+try {
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     customer: customerId,
@@ -80,4 +140,10 @@ export async function POST(req: Request) {
   });
 
   return NextResponse.json({ url: session.url });
+} catch (err: any) {
+  return NextResponse.json(
+    { error: err?.message ?? 'Failed to create checkout session' },
+    { status: 500 }
+  );
+}
 }

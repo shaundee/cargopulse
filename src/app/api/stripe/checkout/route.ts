@@ -36,8 +36,8 @@ export async function POST() {
     await supabase.from('organizations').update({ stripe_customer_id: customerId }).eq('id', orgId);
   }
 
-  const priceId = process.env.STRIPE_PRICE_ID_CORE;
-  if (!priceId) return NextResponse.json({ error: 'Missing STRIPE_PRICE_ID_CORE' }, { status: 500 });
+  const priceId = process.env.STRIPE_PRICE_ID_PRO;
+  if (!priceId) return NextResponse.json({ error: 'Missing STRIPE_PRICE_ID_PRO' }, { status: 500 });
 
   const appUrl = process.env.APP_URL ?? 'http://localhost:3000';
 

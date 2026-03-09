@@ -1,174 +1,312 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
-import { Drawer, Stack, TextInput, Select, Button, Group, Modal} from '@mantine/core';
-import type { NewShipmentForm } from '../shipment-types'
+import { useEffect, useRef, useState } from 'react';
+import {
+  Button,
+  Group,
+  Modal,
+  SimpleGrid,
+  Stack,
+  Text,
+  TextInput,
+  ThemeIcon,
+  UnstyledButton,
+} from '@mantine/core';
+import { IconCheck } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { DestinationPicker, type OrgDestination } from '@/app/(app)/_components/DestinationPicker';
+import { countryFlag, getCountryCode } from '@/lib/countries';
+
+// ── Phone field ────────────────────────────────────────────────────────────────
+
+function PhoneField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [touched, setTouched] = useState(false);
+  const digitCount = (value.match(/\d/g) ?? []).length;
+  const showWarn = touched && digitCount > 0 && digitCount < 7;
+
+  return (
+    <Stack gap={4}>
+      <TextInput
+        label="Phone"
+        required
+        type="tel"
+        placeholder="+44 7956 123456"
+        value={value}
+        onChange={e => onChange(e.currentTarget.value.replace(/[^0-9 +\-()]/g, ''))}
+        onBlur={() => setTouched(true)}
+        styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
+      />
+      {showWarn && <Text size="xs" c="yellow.7">Enter at least 7 digits</Text>}
+      <Text size="xs" c="dimmed">Any format — include country code for international</Text>
+    </Stack>
+  );
+}
+
+// ── Service type cards ─────────────────────────────────────────────────────────
+
+const SERVICE_OPTIONS = [
+  { value: 'depot' as const, emoji: '🏢', label: 'Depot', description: 'Customer collects from depot' },
+  { value: 'door_to_door' as const, emoji: '🏠', label: 'Door to Door', description: 'Delivered to their address' },
+];
+
+function ServiceTypeCards({
+  value,
+  onChange,
+}: {
+  value: 'depot' | 'door_to_door';
+  onChange: (v: 'depot' | 'door_to_door') => void;
+}) {
+  return (
+    <SimpleGrid cols={2} spacing="sm">
+      {SERVICE_OPTIONS.map(opt => {
+        const selected = value === opt.value;
+        return (
+          <UnstyledButton
+            key={opt.value}
+            onClick={() => onChange(opt.value)}
+            style={{
+              border: `1.5px solid ${selected ? 'var(--mantine-color-blue-5)' : 'var(--mantine-color-gray-3)'}`,
+              borderRadius: 8,
+              padding: 12,
+              background: selected ? 'var(--mantine-color-blue-0)' : 'transparent',
+              transition: 'border-color 0.1s, background 0.1s',
+              textAlign: 'left',
+            }}
+          >
+            <Group gap="sm" align="flex-start" wrap="nowrap">
+              <Text size="xl" style={{ lineHeight: 1.2 }}>{opt.emoji}</Text>
+              <Stack gap={2}>
+                <Text size="sm" fw={600} c={selected ? 'blue' : undefined}>{opt.label}</Text>
+                <Text size="xs" c="dimmed" lh={1.4}>{opt.description}</Text>
+              </Stack>
+            </Group>
+          </UnstyledButton>
+        );
+      })}
+    </SimpleGrid>
+  );
+}
+
+// ── Success view ───────────────────────────────────────────────────────────────
+
+function SuccessView({
+  trackingCode,
+  destination,
+  serviceType,
+  onCreateAnother,
+  onViewShipment,
+}: {
+  trackingCode: string;
+  destination: string;
+  serviceType: 'depot' | 'door_to_door';
+  onCreateAnother: () => void;
+  onViewShipment: () => void;
+}) {
+  const flag = countryFlag(getCountryCode(destination));
+  const serviceLabel = serviceType === 'depot' ? 'Depot collection' : 'Door to Door';
+
+  return (
+    <Stack gap="lg" py="sm">
+      <Stack align="center" gap="sm">
+        <ThemeIcon size={56} radius="xl" color="green" variant="light">
+          <IconCheck size={28} />
+        </ThemeIcon>
+        <Stack gap={4} align="center">
+          <Text fw={700} size="lg">Shipment created</Text>
+          <Text fw={600} ff="monospace" size="xl" style={{ letterSpacing: '0.08em' }}>
+            {trackingCode}
+          </Text>
+        </Stack>
+      </Stack>
+      <Text size="sm" c="dimmed" ta="center">
+        {flag} Shipping to {destination} · {serviceLabel}
+      </Text>
+      <Stack gap="sm">
+        <Button fullWidth onClick={onCreateAnother}>Create another</Button>
+        <Button fullWidth variant="default" onClick={onViewShipment}>View shipment</Button>
+      </Stack>
+    </Stack>
+  );
+}
+
+// ── Main ───────────────────────────────────────────────────────────────────────
+
+export interface CreateShipmentDrawerProps {
+  opened: boolean;
+  onClose: () => void;
+  onCreated: (result: { trackingCode: string; shipmentId: string }) => void;
+  onViewShipment?: (shipmentId: string) => void;
+  /** Pre-fill the customer name when opened (e.g. from the customers page) */
+  initialName?: string;
+  /** Pre-fill the phone number when opened */
+  initialPhone?: string;
+}
 
 export function CreateShipmentDrawer({
   opened,
   onClose,
-  saving,
-  form,
-  setForm,
-  onSubmit,
-}: {
-  opened: boolean;
-  onClose: () => void;
-  saving: boolean;
-  form: NewShipmentForm;
-  setForm: (updater: (prev: NewShipmentForm) => NewShipmentForm) => void;
-  onSubmit: (e: FormEvent) => void;
-}) {
-  const [destinations, setDestinations] = useState<Array<{ id: string; name: string }>>([]);
+  onCreated,
+  onViewShipment,
+  initialName,
+  initialPhone,
+}: CreateShipmentDrawerProps) {
+  const [customerName, setCustomerName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [destination, setDestination] = useState('');
+  const [serviceType, setServiceType] = useState<'depot' | 'door_to_door'>('depot');
+  const [saving, setSaving] = useState(false);
+  const [orgDestinations, setOrgDestinations] = useState<OrgDestination[]>([]);
+  const [destLoaded, setDestLoaded] = useState(false);
+  const [success, setSuccess] = useState<{
+    trackingCode: string;
+    shipmentId: string;
+    destination: string;
+    serviceType: 'depot' | 'door_to_door';
+  } | null>(null);
 
-useEffect(() => {
-  if (!opened) return;
-  fetch('/api/destinations')
-    .then((r) => r.json())
-    .then((j) => setDestinations((j.destinations ?? []).map((d: any) => ({ id: d.id, name: d.name }))))
-    .catch(() => setDestinations([]));
-}, [opened]);
-const [addDestOpen, setAddDestOpen] = useState(false);
-const [newDestName, setNewDestName] = useState('');
-const [addingDest, setAddingDest] = useState(false);
+  const prevOpenedRef = useRef(false);
+
+  // Pre-fill name/phone when modal transitions from closed → open
+  useEffect(() => {
+    if (opened && !prevOpenedRef.current) {
+      setCustomerName(initialName ?? '');
+      setPhone(initialPhone ?? '');
+    }
+    prevOpenedRef.current = opened;
+  }, [opened, initialName, initialPhone]);
+
+  // Fetch destinations once when modal first opens
+  if (opened && !destLoaded) {
+    setDestLoaded(true);
+    fetch('/api/destinations')
+      .then(r => r.json())
+      .then(j => setOrgDestinations((j.destinations ?? []).map((d: any) => ({ id: d.id, name: d.name }))))
+      .catch(() => {});
+  }
+  if (!opened && destLoaded) {
+    setDestLoaded(false);
+  }
+
+  const digitCount = (phone.match(/\d/g) ?? []).length;
+  const canCreate = customerName.trim().length >= 2 && digitCount >= 7 && destination.trim().length >= 2;
+
+  const flag = destination ? countryFlag(getCountryCode(destination)) : '';
+  const serviceLabel = serviceType === 'depot' ? 'Depot collection' : 'Door to Door';
+
+  async function handleCreate() {
+    if (!canCreate || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch('/api/shipments/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName: customerName.trim(),
+          phone: phone.trim(),
+          destination: destination.trim(),
+          serviceType,
+          phoneCountry: 'GB', // fallback; user is expected to include +CC in phone field
+        }),
+      });
+      const ct = res.headers.get('content-type') ?? '';
+      const payload = ct.includes('application/json') ? await res.json() : await res.text();
+      if (!res.ok) {
+        notifications.show({
+          title: 'Create failed',
+          message: typeof payload === 'object' ? (payload?.error ?? `Error ${res.status}`) : String(payload).slice(0, 140),
+          color: 'red',
+        });
+        return;
+      }
+      const trackingCode: string = payload.tracking_code ?? payload.trackingCode ?? '—';
+      const shipmentId: string = payload.id ?? payload.shipmentId ?? '';
+      setSuccess({ trackingCode, shipmentId, destination, serviceType });
+      onCreated({ trackingCode, shipmentId });
+    } catch (err: any) {
+      notifications.show({ title: 'Create failed', message: err?.message ?? 'Request failed', color: 'red' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleClose() {
+    if (saving) return;
+    setSuccess(null);
+    onClose();
+  }
+
+  function handleCreateAnother() {
+    const keepDest = success?.destination ?? destination;
+    const keepService = success?.serviceType ?? serviceType;
+    setSuccess(null);
+    setCustomerName('');
+    setPhone('');
+    setDestination(keepDest);
+    setServiceType(keepService);
+  }
+
+  function handleViewShipment() {
+    if (!success) return;
+    const id = success.shipmentId;
+    setSuccess(null);
+    onClose();
+    onViewShipment?.(id);
+  }
+
   return (
-    <Drawer opened={opened} onClose={onClose} position="right" size="md" title="New shipment">
-      <form onSubmit={onSubmit}>
+    <Modal opened={opened} onClose={handleClose} title="New shipment" size="sm" centered>
+      {success ? (
+        <SuccessView
+          trackingCode={success.trackingCode}
+          destination={success.destination}
+          serviceType={success.serviceType}
+          onCreateAnother={handleCreateAnother}
+          onViewShipment={handleViewShipment}
+        />
+      ) : (
         <Stack gap="sm">
           <TextInput
             label="Customer name"
-            placeholder="e.g., Andre Brown"
-            value={form.customerName}
-        onChange={(e) => {
-  const v = e.currentTarget.value;
-  setForm((f) => ({ ...f, customerName: v }));
-}}
             required
+            placeholder="e.g. Andre Brown"
+            value={customerName}
+            onChange={e => setCustomerName(e.currentTarget.value)}
           />
 
-      <Group grow>
-  <Select
-    label="Country"
-    data={[
-      { value: 'GB', label: 'UK (+44)' },
-      { value: 'JM', label: 'Jamaica (+1-876)' },
-      { value: 'US', label: 'USA (+1)' },
-      { value: 'CA', label: 'Canada (+1)' },
-    ]}
-    value={form.phoneCountry}
-    onChange={(v) => setForm((f) => ({ ...f, phoneCountry: (v ?? 'GB') as any }))}
-    
-    required
-  />
+          <PhoneField value={phone} onChange={setPhone} />
 
-  <TextInput
-    label="Phone"
-    placeholder="e.g., 079… or +44…"
-    value={form.phone}
-    onChange={(e) => {
-  const v = e.currentTarget.value;
-  setForm((f) => ({ ...f, phone: v }));
-}}
-    required
-  />
-</Group>
-<Group align="end" grow>
-  <Select
-    label="Destination"
-    placeholder="Select destination"
-    data={destinations.map((d) => ({ value: d.name, label: d.name }))}
-    value={form.destination}
-    onChange={(v) => setForm((f) => ({ ...f, destination: v ?? '' }))}
-    searchable
-    required
-  />
+          <Stack gap={4}>
+            <Group gap={4}>
+              <Text size="sm" fw={500}>Destination</Text>
+              <Text size="sm" c="red">*</Text>
+            </Group>
+            <DestinationPicker
+              orgDestinations={orgDestinations}
+              value={destination}
+              onChange={setDestination}
+            />
+          </Stack>
 
-  <Button
-    variant="light"
-    onClick={() => {
-      setNewDestName('');
-      setAddDestOpen(true);
-    }}
-  >
-    + Add
-  </Button>
-</Group>
+          <Stack gap={4}>
+            <Group gap={4}>
+              <Text size="sm" fw={500}>Service type</Text>
+              <Text size="sm" c="red">*</Text>
+            </Group>
+            <ServiceTypeCards value={serviceType} onChange={setServiceType} />
+          </Stack>
 
-          <Select
-            label="Service type"
-            data={[
-              { value: 'depot', label: 'Depot' },
-              { value: 'door_to_door', label: 'Door to door' },
-            ]}
-            value={form.serviceType}
-        onChange={(v) =>
-  setForm((f) => ({
-    ...f,
-    serviceType: (v ?? 'depot') as any,
-  }))
-}
-            required
-          />
-
-          <Button type="submit" loading={saving}>
-            Create shipment
-          </Button>
+          <Stack gap={4} mt="xs">
+            <Button fullWidth onClick={handleCreate} loading={saving} disabled={!canCreate}>
+              Create shipment
+            </Button>
+            {destination && (
+              <Text size="xs" c="dimmed" ta="center">
+                {flag} Shipping to {destination} · {serviceLabel}
+              </Text>
+            )}
+          </Stack>
         </Stack>
-      </form>
-      <Modal opened={addDestOpen} onClose={() => setAddDestOpen(false)} title="Add destination" centered>
-  <Stack>
-    <TextInput
-      label="Destination name"
-      placeholder="e.g., Nigeria"
-      value={newDestName}
-      onChange={(e) => setNewDestName(e.currentTarget.value)}
-      autoFocus
-    />
-
-    <Group justify="flex-end">
-      <Button variant="default" onClick={() => setAddDestOpen(false)}>
-        Cancel
-      </Button>
-
-      <Button
-        loading={addingDest}
-        onClick={async () => {
-          const name = newDestName.trim();
-          if (name.length < 2) {
-            notifications.show({ title: 'Destination', message: 'Enter a name', color: 'red' });
-            return;
-          }
-
-          try {
-            setAddingDest(true);
-            const res = await fetch('/api/destinations', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name }),
-            });
-            const json = await res.json().catch(() => null);
-            if (!res.ok) throw new Error(json?.error ?? 'Failed to add destination');
-
-            const d = json.destination as { id: string; name: string };
-
-            setDestinations((prev) =>
-              prev.some((x) => x.name.toLowerCase() === d.name.toLowerCase()) ? prev : [...prev, d]
-            );
-            setForm((f) => ({ ...f, destination: d.name }));
-            setAddDestOpen(false);
-          } catch (e: any) {
-            notifications.show({ title: 'Destination', message: e?.message ?? 'Failed', color: 'red' });
-          } finally {
-            setAddingDest(false);
-          }
-        }}
-      >
-        Save
-      </Button>
-    </Group>
-  </Stack>
-</Modal>
-    </Drawer>
+      )}
+    </Modal>
   );
 }

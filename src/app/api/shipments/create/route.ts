@@ -4,7 +4,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { normalizeE164Phone } from '@/lib/whatsapp/twilio';
 import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
 import { stripe } from '@/lib/billing/stripe';
-import { canCreateShipment } from '@/lib/billing/plan';
+import { canCreateShipment, getShipmentMeterEventName } from '@/lib/billing/plan';
 
 function makeTrackingCode() {
   // e.g. SHP-6H2K9Q (fast + human-friendly)
@@ -115,14 +115,61 @@ if (!phoneE164) return NextResponse.json({ error: 'Phone must be valid (E.164). 
   revalidatePath('/shipments');
 
   // Increment shipment_count atomically (best-effort, non-fatal)
+  const isFirstShipment = (billing?.shipment_count ?? 0) === 0;
   await supabase.rpc('increment_shipment_count', { p_org_id: orgId });
 
-  // Starter plan overage: fire a Billing Meter event immediately.
-  // Meter must be created in Stripe dashboard with event_name 'cargopulse_starter_shipment'.
-  if (check.overage && billing?.stripe_customer_id) {
+  // On first shipment: complete any pending referral (best-effort)
+  if (isFirstShipment) {
+    try {
+      const { data: referral } = await supabase
+        .from('referrals')
+        .select('id, referrer_org_id')
+        .eq('referred_org_id', orgId)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+      if (referral) {
+        await supabase
+          .from('referrals')
+          .update({ status: 'completed', completed_at: new Date().toISOString() })
+          .eq('id', referral.id);
+
+        // £10 Stripe credit for referrer
+        const { data: referrerBilling } = await supabase
+          .from('organization_billing')
+          .select('stripe_customer_id')
+          .eq('org_id', referral.referrer_org_id)
+          .maybeSingle();
+
+        if (referrerBilling?.stripe_customer_id) {
+          try {
+            await stripe.customers.createBalanceTransaction(
+              referrerBilling.stripe_customer_id,
+              { amount: -1000, currency: 'gbp', description: 'Referral reward — new shipper joined Cargo44' }
+            );
+            await supabase
+              .from('referrals')
+              .update({ referrer_credit_applied: true })
+              .eq('id', referral.id);
+          } catch (e: any) {
+            console.warn('[referral] Stripe credit failed:', e?.message);
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('[referral] completion failed:', e?.message);
+    }
+  }
+
+  // Shipment billing meters:
+  // - Flex meters every shipment
+  // - Starter meters shipments beyond 75/month
+  // - Pro meters shipments beyond 250/month
+  const meterEventName = getShipmentMeterEventName(billing, check.overage);
+  if (meterEventName && billing?.stripe_customer_id) {
     try {
       await stripe.billing.meterEvents.create({
-        event_name: 'cargopulse_starter_shipment',
+        event_name: meterEventName,
         payload: { value: '1', stripe_customer_id: billing.stripe_customer_id },
       });
     } catch (e: any) {

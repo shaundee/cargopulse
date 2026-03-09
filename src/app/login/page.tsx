@@ -1,10 +1,10 @@
 import LoginClient from './LoginClient';
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: { next?: string };
+  searchParams: Promise<{ next?: string; error?: string }>;
 }) {
-  const nextPath = searchParams.next ?? '/dashboard';
-  return <LoginClient nextPath={nextPath} />;
+  const { next, error } = await searchParams;
+  return <LoginClient nextPath={next ?? '/dashboard'} errorMessage={error ?? ''} />;
 }

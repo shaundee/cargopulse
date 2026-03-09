@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { notFound } from 'next/navigation';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { PublicTrackingClient } from './public-tracking-client';
@@ -23,7 +25,7 @@ export default async function TrackingPage({
       .from('shipments')
       .select(`
         id, org_id, tracking_code, destination, service_type, current_status, last_event_at,
-        org:organizations(name, support_phone),
+        org:organizations(name, support_phone, logo_url, origin_country),
         customer:customers(name)
       `)
       .eq('public_tracking_token', token)

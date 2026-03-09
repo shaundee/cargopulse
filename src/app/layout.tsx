@@ -10,6 +10,11 @@ import { Notifications } from '@mantine/notifications';
 export const metadata: Metadata = {
   title: 'CargoPulse',
   description: 'Tracking + WhatsApp updates for UK→Jamaica barrel/box shippers',
+  icons: {
+    icon: '/logosmall.svg',
+    shortcut: '/logosmall.svg',
+    apple: '/logosmall.svg',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

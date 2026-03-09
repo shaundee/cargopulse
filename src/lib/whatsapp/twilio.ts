@@ -10,7 +10,7 @@ export function isTwilioConfigured() {
 
 export function normalizeE164Phone(
   input: string,
-  opts?: { defaultCountry?: 'GB' | 'JM' | 'US' | 'CA' }
+  opts?: { defaultCountry?: 'GB' | 'JM' | 'BB' | 'NG' | 'GH' | 'US' | 'CA' }
 ): string | null {
   const raw0 = String(input ?? '').trim();
   if (!raw0) return null;
@@ -55,6 +55,27 @@ export function normalizeE164Phone(
     return null;
   }
 
+  if (cc === 'BB') {
+    // Barbados: NANP +1-246
+    if (digits.length === 7) return `+1246${digits}`;
+    if (digits.length === 10 && digits.startsWith('246')) return `+1${digits}`;
+    return null;
+  }
+
+  if (cc === 'NG') {
+    // Nigeria: +234 — local 08012345678 (11 digits with leading 0) or 8012345678 (10 digits)
+    if (digits.startsWith('0') && digits.length === 11) return `+234${digits.slice(1)}`;
+    if (digits.length === 10) return `+234${digits}`;
+    return null;
+  }
+
+  if (cc === 'GH') {
+    // Ghana: +233 — local 0241234567 (10 digits with leading 0) or 241234567 (9 digits)
+    if (digits.startsWith('0') && digits.length === 10) return `+233${digits.slice(1)}`;
+    if (digits.length === 9) return `+233${digits}`;
+    return null;
+  }
+
   return null;
 }
 
@@ -85,6 +106,13 @@ export async function twilioSendWhatsApp(args: { toE164: string; body: string })
 
   const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
 
+  console.log('[Twilio] sending WhatsApp', {
+    to,
+    from,
+    bodyPreview: args.body.slice(0, 80) + (args.body.length > 80 ? '…' : ''),
+    hasStatusCallback: !!statusCallback,
+  });
+
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -97,9 +125,18 @@ export async function twilioSendWhatsApp(args: { toE164: string; body: string })
   const data = await res.json().catch(() => null);
 
   if (!res.ok) {
+    console.error('[Twilio] error', {
+      httpStatus: res.status,
+      code:     data?.code,
+      message:  data?.message,
+      moreInfo: data?.more_info,
+      status:   data?.status,
+      raw:      data,
+    });
     const msg = data?.message || `Twilio error (${res.status})`;
     throw new Error(msg);
   }
 
+  console.log('[Twilio] success', { sid: data.sid, status: data.status });
   return { sid: data.sid as string, status: String(data.status ?? 'queued') };
 }

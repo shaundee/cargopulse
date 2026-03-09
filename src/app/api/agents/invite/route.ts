@@ -4,6 +4,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
 import { getBaseUrlFromHeaders } from '@/lib/http/base-url';
 import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
+import { canUseAgentPortal } from '@/lib/billing/plan';
 
 function digitsOnly(s: string) {
   return String(s ?? '').replace(/\D/g, '');
@@ -51,12 +52,31 @@ export async function POST(req: Request) {
   const allow = role === 'admin' || role === 'staff';
   if (!allow) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
+  const { data: billing } = await supabase
+    .from('organization_billing')
+    .select('status, plan_tier')
+    .eq('org_id', member.org_id)
+    .maybeSingle();
+
+  if (!canUseAgentPortal(billing)) {
+    return NextResponse.json({ error: 'agent_portal_upgrade_required' }, { status: 403 });
+  }
+
   const orgId = String(member.org_id);
   const agentEmail = agentEmailInput && agentEmailInput.includes('@')
     ? agentEmailInput
     : makeAgentEmail(orgId, agentPhoneE164);
 
   const admin = createSupabaseAdminClient();
+
+  // Expire any existing pending invites for this agent email so their tokens
+  // don't linger after generateLink creates a new one (which invalidates the old).
+  await admin
+    .from('org_agent_invites')
+    .update({ status: 'expired' })
+    .eq('org_id', orgId)
+    .eq('agent_email', agentEmail)
+    .eq('status', 'pending');
 
   // Generate magic link token_hash (PKCE-friendly approach uses verifyOtp)
   const { data: linkData, error: linkErr } = await admin.auth.admin.generateLink({
@@ -96,7 +116,11 @@ export async function POST(req: Request) {
     (process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : null) ??
     getBaseUrlFromHeaders(req.headers);
 
-const inviteUrl = `${baseUrl}/auth/confirm?` + new URLSearchParams({
+  if (!baseUrl) {
+    return NextResponse.json({ error: 'Server misconfiguration: APP_URL is not configured' }, { status: 500 });
+  }
+
+  const inviteUrl = `${baseUrl}/auth/confirm?` + new URLSearchParams({
   token_hash: tokenHash,
   type: 'magiclink',
   next: '/agent',

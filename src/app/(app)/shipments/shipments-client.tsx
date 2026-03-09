@@ -1,6 +1,5 @@
 'use client';
 
-import type { FormEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -24,18 +23,21 @@ import {
   IconCopy,
   IconDownload,
   IconLink,
+  IconPackage,
   IconPaperclip,
   IconPlus,
   IconPrinter,
   IconSearch,
+  IconUpload,
   IconX,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
-import type { NewShipmentForm, ShipmentRow, ShipmentStatus } from './shipment-types';
+import type { ShipmentRow, ShipmentStatus } from './shipment-types';
 import { formatWhen, statusBadgeColor, statusLabel } from './shipment-types';
 import { CreateShipmentDrawer } from './components/CreateShipmentDrawer';
 import { ShipmentDetailDrawer } from './components/ShipmentDetailDrawer';
+import { EmptyState } from '../_components/EmptyState';
 
 /** ---------- phone helpers ---------- */
 function digitsOnly(s: string) {
@@ -88,21 +90,10 @@ export default function ShipmentsClient({
 }) {
   const router = useRouter();
 
-  // Create shipment drawer state
+  // Create shipment modal state
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   const [listRefreshKey, setListRefreshKey] = useState(0);
-
-  const [form, _setForm] = useState<NewShipmentForm>({
-    customerName: '',
-    phone: '',
-    destination: '',
-    serviceType: 'depot',
-    phoneCountry: 'GB',
-  });
-
-  const setForm = (updater: (prev: NewShipmentForm) => NewShipmentForm) => _setForm(updater);
 
   // Search + Filters
   const [query, setQuery] = useState('');
@@ -120,7 +111,7 @@ export default function ShipmentsClient({
   // Detail drawer
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailShipmentId, setDetailShipmentId] = useState<string | null>(null);
-  const [detailTab, setDetailTab] = useState<'logistics' | 'cargo' | 'proof'>('logistics');
+  const [detailTab, setDetailTab] = useState<'timeline' | 'cargo' | 'proof'>('timeline');
 
   const [destinationOptions, setDestinationOptions] = useState<string[]>(['all']);
 
@@ -129,7 +120,7 @@ export default function ShipmentsClient({
 
   const showFullPhone = query.trim().length > 0; // key UX: show full number while searching
 
-  function openShipmentDetail(shipmentId: string, tab: 'logistics' | 'cargo' | 'proof' = 'logistics') {
+  function openShipmentDetail(shipmentId: string, tab: 'timeline' | 'cargo' | 'proof' = 'timeline') {
     setDetailShipmentId(shipmentId);
     setDetailTab(tab);
     setDetailOpen(true);
@@ -229,75 +220,6 @@ export default function ShipmentsClient({
     });
   }
 
-  async function createShipment(e: FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-
-    try {
-      const res = await fetch('/api/shipments/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerName: form.customerName,
-          phone: form.phone,
-          destination: form.destination,
-          serviceType: form.serviceType,
-          phoneCountry: form.phoneCountry,
-        }),
-      });
-
-      const contentType = res.headers.get('content-type') || '';
-      const isJson = contentType.includes('application/json');
-      const payload = isJson ? await res.json() : await res.text();
-
-      if (!res.ok) {
-        notifications.show({
-          title: 'Create failed',
-          message: isJson
-            ? (payload?.error ?? `Request failed (${res.status})`)
-            : `Request failed (${res.status}): ${String(payload).slice(0, 140)}…`,
-          color: 'red',
-        });
-        return;
-      }
-
-      if (!isJson) {
-        notifications.show({
-          title: 'Create failed',
-          message: `Unexpected non-JSON response (${res.status}): ${String(payload).slice(0, 140)}…`,
-          color: 'red',
-        });
-        return;
-      }
-
-      notifications.show({
-        title: 'Shipment created',
-        message: `Tracking: ${payload.tracking_code ?? payload.trackingCode ?? '(missing)'}`,
-        color: 'green',
-      });
-
-      setListRefreshKey((k) => k + 1);
-      setDrawerOpen(false);
-
-      setForm(() => ({
-        customerName: '',
-        phone: '',
-        destination: '',
-        serviceType: 'depot',
-        phoneCountry: form.phoneCountry,
-      }));
-
-      router.refresh();
-    } catch (err: any) {
-      notifications.show({
-        title: 'Create failed',
-        message: err?.message ?? 'Request failed',
-        color: 'red',
-      });
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function applyBulkStatus() {
     if (!selectedRecords.length) return;
@@ -349,12 +271,14 @@ export default function ShipmentsClient({
   return (
     <Stack gap="md">
       <Group justify="space-between">
-        <Stack gap={2}>
-          <Text fw={700} size="lg">Shipments</Text>
-          <Text c="dimmed" size="sm">
-            Track shipments, send updates, and reduce “where is it?” calls.
-          </Text>
-        </Stack>
+        <Text fw={700} size="lg">
+          Shipments
+          {records.length > 0 && (
+            <span style={{ fontWeight: 400, color: 'var(--mantine-color-dimmed)' }}>
+              {' '}({records.length})
+            </span>
+          )}
+        </Text>
 
         <Button leftSection={<IconPlus size={16} />} onClick={() => setDrawerOpen(true)}>
           New shipment
@@ -383,6 +307,9 @@ export default function ShipmentsClient({
                 { value: 'loaded', label: statusLabel('loaded') },
                 { value: 'departed_uk', label: statusLabel('departed_uk') },
                 { value: 'arrived_destination', label: statusLabel('arrived_destination') },
+                { value: 'customs_processing', label: statusLabel('customs_processing') },
+                { value: 'customs_cleared', label: statusLabel('customs_cleared') },
+                { value: 'awaiting_collection', label: statusLabel('awaiting_collection') },
                 { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
                 { value: 'delivered', label: statusLabel('delivered') },
               ]}
@@ -426,9 +353,19 @@ export default function ShipmentsClient({
             </Button>
           </Group>
 
-          <Button variant="light" leftSection={<IconDownload size={16} />} onClick={downloadShipmentsCsv}>
-            Export CSV
-          </Button>
+        <Group gap="sm">
+  <Button
+    variant="light"
+    leftSection={<IconUpload size={16} />}
+    onClick={() => router.push('/shipments/import')}
+  >
+    Import
+  </Button>
+
+  <Button variant="light" leftSection={<IconDownload size={16} />} onClick={downloadShipmentsCsv}>
+    Export CSV
+  </Button>
+</Group>
         </Group>
 
         {selectedRecords.length ? (
@@ -447,6 +384,9 @@ export default function ShipmentsClient({
                     { value: 'loaded', label: statusLabel('loaded') },
                     { value: 'departed_uk', label: statusLabel('departed_uk') },
                     { value: 'arrived_destination', label: statusLabel('arrived_destination') },
+                    { value: 'customs_processing', label: statusLabel('customs_processing') },
+                    { value: 'customs_cleared', label: statusLabel('customs_cleared') },
+                    { value: 'awaiting_collection', label: statusLabel('awaiting_collection') },
                     { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
                   ]}
                   w={220}
@@ -478,6 +418,14 @@ export default function ShipmentsClient({
           </Paper>
         ) : null}
 
+        {records.length === 0 && !loadingList && !query && statusFilter === 'all' && destinationFilter === 'all' && serviceFilter === 'all' ? (
+          <EmptyState
+            icon={<IconPackage size={28} />}
+            title="No shipments yet"
+            description="Book your first shipment and your customer gets a tracking code instantly."
+            action={{ label: 'New shipment', onClick: () => setDrawerOpen(true) }}
+          />
+        ) : (
         <DataTable
           withTableBorder
           withColumnBorders
@@ -487,7 +435,16 @@ export default function ShipmentsClient({
           fetching={loadingList}
           selectedRecords={selectedRecords}
           onSelectedRecordsChange={setSelectedRecords}
-          onRowClick={({ record }) => openShipmentDetail(record.id, 'logistics')}
+          onRowClick={({ record }) => openShipmentDetail(record.id, 'timeline')}
+          rowStyle={(record) =>
+            selectedRecords.some((s) => s.id === record.id)
+              ? { boxShadow: 'inset 3px 0 0 var(--mantine-color-blue-6)' }
+              : {}
+          }
+          style={{
+            '--mantine-datatable-highlight-on-hover-color': 'var(--mantine-color-gray-2)',
+            '--mantine-datatable-selection-color': 'var(--mantine-color-blue-1)',
+          } as React.CSSProperties}
           columns={[
             { accessor: 'tracking_code', title: 'Tracking' },
             {
@@ -551,7 +508,7 @@ export default function ShipmentsClient({
                       )}
                     </CopyButton>
 
-                    <Tooltip label="WhatsApp" withArrow>
+                    <Tooltip label="Send WhatsApp" withArrow>
                       <ActionIcon
                         variant="subtle"
                         component="a"
@@ -686,11 +643,10 @@ export default function ShipmentsClient({
                     </ActionIcon>
                   </Tooltip>
 
-                  <Tooltip label="Print" withArrow>
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      leftSection={<IconPrinter size={14} />}
+                  <Tooltip label="Print BOL" withArrow>
+                    <ActionIcon
+                      variant="light"
+                      aria-label="Print BOL"
                       onClick={(e) => {
                         e.stopPropagation();
                         const url = new URL(
@@ -700,23 +656,28 @@ export default function ShipmentsClient({
                         window.open(url, '_blank', 'noopener,noreferrer');
                       }}
                     >
-                      Print
-                    </Button>
+                      <IconPrinter size={16} />
+                    </ActionIcon>
                   </Tooltip>
                 </Group>
               ),
             },
           ]}
         />
+        )}
       </Paper>
 
       <CreateShipmentDrawer
         opened={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        saving={saving}
-        form={form}
-        setForm={setForm}
-        onSubmit={createShipment}
+        onCreated={() => {
+          setListRefreshKey(k => k + 1);
+          router.refresh();
+        }}
+        onViewShipment={shipmentId => {
+          setDrawerOpen(false);
+          openShipmentDetail(shipmentId);
+        }}
       />
 
       <ShipmentDetailDrawer

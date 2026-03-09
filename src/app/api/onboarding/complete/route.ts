@@ -27,6 +27,8 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => null);
   const orgName = body?.orgName;
+  const referralCode = body?.referralCode ? String(body.referralCode).trim().toUpperCase() : null;
+  const originCountry = body?.originCountry ? String(body.originCountry).trim().slice(0, 10) : null;
 
   if (!orgName || String(orgName).trim().length < 2) {
     return NextResponse.json({ error: 'Organization name too short' }, { status: 400 });
@@ -35,12 +37,21 @@ export async function POST(req: Request) {
   // 1) Create org + membership (uses your SECURITY DEFINER function)
   const { data: orgId, error: orgErr } = await supabase.rpc('create_org_for_user', {
     p_org_name: String(orgName).trim(),
-  });
+    p_referral_code: referralCode,
+  } as any);
 
   if (orgErr) return NextResponse.json({ error: orgErr.message }, { status: 400 });
   if (!orgId) return NextResponse.json({ error: 'Org creation failed' }, { status: 400 });
 
-  // 2) Seed templates directly using orgId returned (no membership read needed)
+  // 2) Persist origin_country if provided
+  if (originCountry) {
+    await supabase
+      .from('organizations')
+      .update({ origin_country: originCountry })
+      .eq('id', orgId);
+  }
+
+  // 3) Seed templates directly using orgId returned (no membership read needed)
   const inserts = defaults.map((d) => ({
     org_id: orgId,
     status: d.status,

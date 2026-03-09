@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 export async function POST(req: Request) {
   const supabase = await createSupabaseServerClient();
@@ -29,17 +31,32 @@ export async function POST(req: Request) {
   if (typeof body.support_phone === 'string') {
     patch.support_phone = body.support_phone.trim().slice(0, 30);
   }
+  if (typeof body.origin_country === 'string') {
+    patch.origin_country = body.origin_country.trim().slice(0, 10);
+  }
+  if (typeof body.logo_url === 'string') {
+    const url = body.logo_url.trim();
+    // Allow empty string (to clear) or https URLs only
+    if (url === '' || url.startsWith('https://')) {
+      patch.logo_url = url.slice(0, 500);
+    }
+  }
 
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
   }
 
-  const { error } = await supabase
+  const admin = createSupabaseAdminClient();
+  const { data: updated, error } = await admin
     .from('organizations')
     .update(patch)
-    .eq('id', member.org_id);
+    .eq('id', member.org_id)
+    .select('logo_url')
+    .maybeSingle();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  return NextResponse.json({ ok: true });
+  try { revalidatePath('/t/[token]', 'page'); } catch {}
+
+  return NextResponse.json({ ok: true, logo_url: updated?.logo_url ?? null });
 }

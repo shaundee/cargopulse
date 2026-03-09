@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(sed:*)",
+      "Bash(npx tsc:*)",
+      "Bash(node:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(find F:\\\\work\\\\projects\\\\cargopulse\\\\src\\\\app\\\\\\(app\\):*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(cd:*)",
+      "Bash(find F:\\\\work\\\\projects\\\\cargopulse\\\\src\\\\app\\\\\\(app\\)\\\\messages:*)",
+      "Bash(find F:\\\\work\\\\projects\\\\cargopulse\\\\src\\\\app\\\\\\(app\\)\\\\settings:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(tasklist:*)",
+      "Bash(head:*)",
+      "Bash(cat:*)",
+      "Bash(do echo:*)",
+      "Bash(python3:*)",
+      "Bash(find:*)"
+    ]
+  }
+}
