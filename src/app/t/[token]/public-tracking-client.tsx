@@ -12,6 +12,7 @@ import {
   IconClipboardCheck,
   IconShare2,
 } from '@tabler/icons-react';
+import { destFlag } from '@/lib/destinations';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -56,35 +57,6 @@ const STATUS_TO_STEP: Record<string, number> = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function destFlag(dest: string): string {
-  const d = dest.toLowerCase().trim();
-  const flags: Record<string, string> = {
-    'jamaica':              '🇯🇲',
-    'uk':                   '🇬🇧',
-    'united kingdom':       '🇬🇧',
-    'usa':                  '🇺🇸',
-    'united states':        '🇺🇸',
-    'canada':               '🇨🇦',
-    'barbados':             '🇧🇧',
-    'trinidad':             '🇹🇹',
-    'trinidad and tobago':  '🇹🇹',
-    'guyana':               '🇬🇾',
-    'antigua':              '🇦🇬',
-    'antigua and barbuda':  '🇦🇬',
-    'st lucia':             '🇱🇨',
-    'saint lucia':          '🇱🇨',
-    'dominica':             '🇩🇲',
-    'grenada':              '🇬🇩',
-    'st vincent':           '🇻🇨',
-    'saint vincent':        '🇻🇨',
-    'belize':               '🇧🇿',
-    'ghana':                '🇬🇭',
-    'nigeria':              '🇳🇬',
-    'cameroon':             '🇨🇲',
-    'kenya':                '🇰🇪',
-  };
-  return flags[d] ?? '🌍';
-}
 
 function statusLabel(s: string, destination?: string): string {
   switch (s) {

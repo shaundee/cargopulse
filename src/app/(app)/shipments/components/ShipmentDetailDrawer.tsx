@@ -43,33 +43,12 @@ import { StatusUpdateCard } from './StatusUpdateCard';
 import { MessageHistoryCard } from './MessageHistoryCard';
 import { PodCard } from './PodCard';
 import { TimelineCard } from './TimelineCard';
+import { destFlag } from '@/lib/destinations';
 
 type DrawerTab = 'timeline' | 'cargo' | 'proof';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const DESTINATION_FLAG: Record<string, string> = {
-  jamaica: '🇯🇲',
-  uk: '🇬🇧',
-  'united kingdom': '🇬🇧',
-  ghana: '🇬🇭',
-  nigeria: '🇳🇬',
-  usa: '🇺🇸',
-  'united states': '🇺🇸',
-  canada: '🇨🇦',
-  barbados: '🇧🇧',
-  trinidad: '🇹🇹',
-  'trinidad and tobago': '🇹🇹',
-  guyana: '🇬🇾',
-  'sierra leone': '🇸🇱',
-  cameroon: '🇨🇲',
-  kenya: '🇰🇪',
-};
-
-function destFlag(dest: string | null | undefined) {
-  if (!dest) return '';
-  return DESTINATION_FLAG[dest.toLowerCase()] ?? '';
-}
 
 function serviceLabel(s: string | null | undefined) {
   if (s === 'door_to_door') return 'Door to Door';

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
+import { DESTINATIONS } from '@/lib/destinations';
 
 const defaults = [
   { status: 'received', body: 'Hi {{name}}, we received your shipment ({{code}}) at our UK depot.\nTrack: {{tracking_url}}' },
@@ -51,7 +52,13 @@ export async function POST(req: Request) {
       .eq('id', orgId);
   }
 
-  // 3) Seed templates directly using orgId returned (no membership read needed)
+  // 3) Seed destinations (belt-and-suspenders — RPC also does this)
+  await supabase.from('org_destinations').upsert(
+    DESTINATIONS.map((d) => ({ org_id: orgId, name: d.name, sort_order: d.sortOrder })),
+    { onConflict: 'org_id,name', ignoreDuplicates: true }
+  );
+
+  // 4) Seed templates directly using orgId returned (no membership read needed)
   const inserts = defaults.map((d) => ({
     org_id: orgId,
     status: d.status,
