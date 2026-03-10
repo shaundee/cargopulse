@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { blockIfAgentMode } from '@/lib/auth/block-agent-mode';
+import { isTwilioConfigured, normalizeE164Phone, twilioSendWhatsApp } from '@/lib/whatsapp/twilio';
+import { renderTemplate } from '@/lib/messaging/render-template';
 
 function extFor(contentType: string) {
   const ct = String(contentType || '').toLowerCase();
@@ -58,7 +60,7 @@ export async function POST(req: Request) {
   // Verify shipment belongs to this org
   const { data: shipment, error: shipErr } = await supabase
     .from('shipments')
-    .select('id, tracking_code, current_status')
+    .select('id, tracking_code, current_status, public_tracking_token, customers(name, phone, phone_e164, country_code)')
     .eq('id', shipmentId)
     .eq('org_id', orgId)
     .maybeSingle();
@@ -117,6 +119,97 @@ export async function POST(req: Request) {
     .from('shipments')
     .update({ current_status: 'collected', last_event_at: occurredAtISO })
     .eq('id', shipmentId);
+
+  // Best-effort: send WhatsApp "collected" notification
+  try {
+    const customer = Array.isArray(shipment.customers) ? shipment.customers[0] : shipment.customers;
+    const customerPhoneRaw = String((customer as any)?.phone_e164 ?? (customer as any)?.phone ?? '').trim();
+    const defaultCountry = String((customer as any)?.country_code ?? 'GB').toUpperCase();
+    const toE164 = customerPhoneRaw.startsWith('+')
+      ? customerPhoneRaw
+      : normalizeE164Phone(customerPhoneRaw, { defaultCountry: defaultCountry as any });
+
+    if (toE164) {
+      const { data: tpl } = await supabase
+        .from('message_templates')
+        .select('id, body, enabled')
+        .eq('org_id', orgId)
+        .eq('status', 'collected')
+        .eq('enabled', true)
+        .limit(1)
+        .maybeSingle();
+
+      if (tpl?.id) {
+        const baseUrl = process.env.APP_URL?.replace(/\/$/, '') ?? '';
+        const token = (shipment as any).public_tracking_token as string | null;
+        const trackingUrl = token && baseUrl ? `${baseUrl}/t/${token}` : '';
+        const customerName = String((customer as any)?.name ?? '');
+
+        const rendered = renderTemplate(String(tpl.body ?? ''), {
+          customer_name: customerName,
+          tracking_code: shipment.tracking_code ?? '',
+          destination: String(payload.destination ?? ''),
+          status: 'collected',
+          tracking_url: trackingUrl,
+          name: customerName,
+          code: shipment.tracking_code ?? '',
+        });
+
+        const shouldSend = isTwilioConfigured();
+        const provider = shouldSend ? 'twilio_whatsapp' : 'log';
+        const initialSendStatus = shouldSend ? 'queued' : 'logged';
+
+        const { data: logRow, error: logErr } = await supabase
+          .from('message_logs')
+          .insert({
+            org_id: orgId,
+            shipment_id: shipmentId,
+            template_id: tpl.id,
+            to_phone: toE164,
+            provider,
+            send_status: initialSendStatus,
+            body: rendered,
+            status: 'collected',
+            direction: 'outbound',
+            sent_at: new Date().toISOString(),
+            error: null,
+          })
+          .select('id')
+          .single();
+
+        await supabase
+          .from('shipments')
+          .update({
+            last_outbound_message_at: new Date().toISOString(),
+            last_outbound_message_status: 'collected',
+            last_outbound_send_status: initialSendStatus,
+            last_outbound_preview: String(rendered).slice(0, 140),
+          })
+          .eq('id', shipmentId);
+
+        if (!logErr && shouldSend && logRow?.id) {
+          try {
+            const r = await twilioSendWhatsApp({ toE164, body: rendered });
+            await supabase
+              .from('message_logs')
+              .update({ provider_message_id: r.sid, send_status: r.status, error: null, sent_at: new Date().toISOString() })
+              .eq('id', logRow.id);
+            await supabase
+              .from('shipments')
+              .update({ last_outbound_send_status: String(r.status ?? 'queued') })
+              .eq('id', shipmentId);
+          } catch (e: any) {
+            await supabase
+              .from('message_logs')
+              .update({ send_status: 'failed', error: e?.message ?? 'Send failed' })
+              .eq('id', logRow.id);
+          }
+        }
+      }
+    }
+  } catch (e: any) {
+    console.error('[field/collect] WhatsApp send failed', e?.message ?? e);
+  }
 
   // Upload assets (photos + signature)
   const createdBy = user.id;

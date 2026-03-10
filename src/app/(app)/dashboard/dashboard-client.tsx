@@ -11,11 +11,13 @@ import {
   Group,
   Paper,
   Progress,
+  ScrollArea,
   SimpleGrid,
   Stack,
   Text,
   ThemeIcon,
   Title,
+  UnstyledButton,
 } from '@mantine/core';
 import {
   IconAlertTriangle,
@@ -50,6 +52,14 @@ type RecentShipment = {
 
 type DestCount = { destination: string; count: number };
 
+export type OpsSummary = {
+  pending_collection: number;
+  in_transit: number;
+  arrived_not_cleared: number;
+  awaiting_delivery: number;
+  overdue_collection: number;
+};
+
 interface DashboardProps {
   greeting: string;
   orgName: string;
@@ -59,6 +69,7 @@ interface DashboardProps {
   recentShipments: RecentShipment[];
   byDestination: DestCount[];
   isAdmin: boolean;
+  opsSummary: OpsSummary;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -228,7 +239,7 @@ function AttentionRow({ item }: { item: AttentionItem }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function DashboardClient({
-  greeting, orgName, stats, billing, attentionItems, recentShipments, byDestination, isAdmin,
+  greeting, orgName, stats, billing, attentionItems, recentShipments, byDestination, isAdmin, opsSummary,
 }: DashboardProps) {
   const { tier, shipmentCount, shipmentLimit, isActive } = billing;
   const usagePct = shipmentLimit ? Math.min((shipmentCount / shipmentLimit) * 100, 100) : 0;
@@ -265,6 +276,90 @@ export function DashboardClient({
         <StatCard label="Delivered" value={stats.delivered30} sub="this month" color="green" icon={<IconCheck size={18} />} />
         <StatCard label="Messages Sent" value={stats.messages30} sub="this month" color="teal" icon={<IconSend size={18} />} />
       </SimpleGrid>
+
+      {/* Ops strip */}
+      <ScrollArea type="scroll" scrollbarSize={4}>
+        <Group gap="sm" wrap="nowrap" pb={4}>
+          {[
+            {
+              label: 'Pending collection',
+              value: opsSummary.pending_collection,
+              color: 'blue',
+              href: '/shipments?status=received&service_type=door_to_door',
+              overdue: false,
+            },
+            {
+              label: 'In transit',
+              value: opsSummary.in_transit,
+              color: 'indigo',
+              href: '/shipments?status=departed_uk',
+              overdue: false,
+            },
+            {
+              label: 'Arrived, not cleared',
+              value: opsSummary.arrived_not_cleared,
+              color: 'cyan',
+              href: '/shipments?status=arrived_destination',
+              overdue: false,
+            },
+            {
+              label: 'Awaiting delivery',
+              value: opsSummary.awaiting_delivery,
+              color: 'teal',
+              href: '/shipments?status=awaiting_collection',
+              overdue: false,
+            },
+            {
+              label: 'Overdue collection',
+              value: opsSummary.overdue_collection,
+              color: 'red',
+              href: '/shipments?status=received&overdue=1',
+              overdue: true,
+            },
+          ].map(({ label, value, color, href, overdue }) => (
+            <UnstyledButton
+              key={label}
+              component="a"
+              href={href}
+              style={{ textDecoration: 'none', flexShrink: 0 }}
+            >
+              <Paper
+                withBorder
+                p="md"
+                radius="md"
+                style={{
+                  minWidth: 140,
+                  background: overdue && value > 0
+                    ? 'var(--mantine-color-red-0)'
+                    : undefined,
+                  borderColor: overdue && value > 0
+                    ? 'var(--mantine-color-red-3)'
+                    : undefined,
+                  transition: 'background 0.12s',
+                }}
+              >
+                <Group gap={6} mb={4}>
+                  <Box
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      background: `var(--mantine-color-${color}-5)`,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: '0.04em' }}>
+                    {label}
+                  </Text>
+                </Group>
+                <Text fw={800} size="xl" c={overdue && value > 0 ? 'red' : undefined} lh={1}>
+                  {value}
+                </Text>
+              </Paper>
+            </UnstyledButton>
+          ))}
+        </Group>
+      </ScrollArea>
 
       {/* Usage meter — free and starter only */}
       {shipmentLimit !== null && (

@@ -314,6 +314,15 @@ function OutboxCard({
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+type PendingPickup = {
+  id: string;
+  tracking_code: string;
+  cargo_type: string;
+  cargo_meta: Record<string, unknown> | null;
+  created_at: string;
+  customers: { name: string } | { name: string }[] | null;
+};
+
 type LookupResult =
   | { found: false }
   | {
@@ -347,6 +356,10 @@ export function FieldIntakeClient() {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupResult, setLookupResult] = useState<LookupResult | null>(null);
 
+  // Pending pickups (door-to-door, received)
+  const [pendingPickups, setPendingPickups] = useState<PendingPickup[]>([]);
+  const [showPickups, setShowPickups] = useState(false);
+
   const photoRef = useRef<HTMLInputElement>(null);
   const syncingRef = useRef(false);
   const autoSyncArmedRef = useRef(false);
@@ -360,7 +373,7 @@ export function FieldIntakeClient() {
   const failedCount = items.filter((x) => x.status === 'failed').length;
   const canSyncAll = canSync && (pendingOnlyCount > 0 || failedCount > 0) && !busy;
 
-  // Load destinations
+  // Load destinations + pending pickups on mount
   useEffect(() => {
     fetch('/api/destinations')
       .then(r => r.json())
@@ -368,6 +381,11 @@ export function FieldIntakeClient() {
         const dests: OrgDestination[] = (j.destinations ?? []).map((d: any) => ({ id: d.id, name: String(d.name) }));
         if (dests.length) setDestinations(dests);
       })
+      .catch(() => {});
+
+    fetch('/api/field/pending-pickups', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(j => { if (Array.isArray(j)) setPendingPickups(j); })
       .catch(() => {});
   }, []);
 
@@ -632,6 +650,12 @@ export function FieldIntakeClient() {
     }
   }
 
+  function pickupCustomerName(p: PendingPickup): string {
+    const raw = p.customers;
+    const c = Array.isArray(raw) ? raw[0] : raw;
+    return c?.name ?? '—';
+  }
+
   const pendingLabel = pendingOnlyCount + failedCount;
 
   // Shared photo + signature capture section (used in both modes)
@@ -729,6 +753,54 @@ export function FieldIntakeClient() {
         {/* Form card */}
         <Card withBorder radius="md" p="md">
           <Stack gap="sm">
+            {/* Today's pickups — collapsible */}
+            <UnstyledButton
+              onClick={() => setShowPickups(v => !v)}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+            >
+              <Group gap={6}>
+                <Text size="sm" fw={600}>Today's pickups</Text>
+                <Badge size="sm" variant="light" color="blue">{pendingPickups.length}</Badge>
+              </Group>
+              {showPickups
+                ? <IconChevronUp size={14} color="var(--mantine-color-gray-5)" />
+                : <IconChevronDown size={14} color="var(--mantine-color-gray-5)" />}
+            </UnstyledButton>
+
+            <Collapse in={showPickups}>
+              <Stack gap="xs" pb="xs">
+                {pendingPickups.length === 0 ? (
+                  <Text size="xs" c="dimmed">No pending pickups</Text>
+                ) : (
+                  pendingPickups.map(p => (
+                    <UnstyledButton
+                      key={p.id}
+                      style={{ display: 'block', width: '100%' }}
+                      onClick={() => {
+                        setCollectMode('pre_booked');
+                        setCodeInput(p.tracking_code);
+                        setLookupResult(null);
+                      }}
+                    >
+                      <Card withBorder radius="sm" p="sm" style={{ background: 'var(--mantine-color-gray-0)' }}>
+                        <Group justify="space-between" wrap="nowrap">
+                          <Stack gap={2} style={{ minWidth: 0 }}>
+                            <Text size="sm" fw={600} truncate>{pickupCustomerName(p)}</Text>
+                            <Text size="xs" c="dimmed" truncate>
+                              {String((p.cargo_meta as any)?.pickup_address ?? 'No address')}
+                            </Text>
+                          </Stack>
+                          <Badge size="xs" variant="light" color="gray" style={{ flexShrink: 0 }}>
+                            {toTitleCase(p.cargo_type)}
+                          </Badge>
+                        </Group>
+                      </Card>
+                    </UnstyledButton>
+                  ))
+                )}
+              </Stack>
+            </Collapse>
+
             <SegmentedControl
               value={collectMode}
               onChange={v => handleModeChange(v as 'new' | 'pre_booked')}

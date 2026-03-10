@@ -40,6 +40,8 @@ export default async function DashboardPage() {
   const since3  = sinceIso(3);
 
   // ── Main parallel fetch ────────────────────────────────────────────────────
+  const overdueThreshold = new Date(Date.now() - 3 * 86400000).toISOString();
+
   const [
     orgQ,
     billingQ,
@@ -52,6 +54,11 @@ export default async function DashboardPage() {
     noMsgCountQ,
     recentQ,
     destQ,
+    opsPendingCollQ,
+    opsInTransitQ,
+    opsArrivedQ,
+    opsAwaitingQ,
+    opsOverdueQ,
   ] = await Promise.all([
     // 1. Org name
     supabase
@@ -136,6 +143,40 @@ export default async function DashboardPage() {
       .select('destination')
       .eq('org_id', orgId)
       .not('current_status', 'in', '(delivered,collected_by_customer)'),
+
+    // 12–16. Ops summary metrics
+    supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', orgId)
+      .eq('service_type', 'door_to_door')
+      .eq('current_status', 'received'),
+
+    supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', orgId)
+      .eq('current_status', 'departed_uk'),
+
+    supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', orgId)
+      .in('current_status', ['arrived_destination', 'customs_processing']),
+
+    supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', orgId)
+      .in('current_status', ['awaiting_collection', 'out_for_delivery']),
+
+    supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', orgId)
+      .eq('service_type', 'door_to_door')
+      .eq('current_status', 'received')
+      .lt('created_at', overdueThreshold),
   ]);
 
   // ── No-POD cross-check ────────────────────────────────────────────────────
@@ -213,6 +254,14 @@ export default async function DashboardPage() {
     };
   });
 
+  const opsSummary = {
+    pending_collection: opsPendingCollQ.count ?? 0,
+    in_transit: opsInTransitQ.count ?? 0,
+    arrived_not_cleared: opsArrivedQ.count ?? 0,
+    awaiting_delivery: opsAwaitingQ.count ?? 0,
+    overdue_collection: opsOverdueQ.count ?? 0,
+  };
+
   // Destination bar chart — group active shipments by destination, top 5
   const destCounts: Record<string, number> = {};
   for (const s of destQ.data ?? []) {
@@ -233,6 +282,7 @@ export default async function DashboardPage() {
       recentShipments={recentShipments}
       byDestination={byDestination}
       isAdmin={isAdmin}
+      opsSummary={opsSummary}
     />
   );
 }
