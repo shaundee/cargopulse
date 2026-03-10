@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActionIcon,
   Badge,
   Box,
   Button,
@@ -12,9 +13,11 @@ import {
   Modal,
   NumberInput,
   Paper,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
+  Table,
   Text,
   Textarea,
   TextInput,
@@ -29,10 +32,13 @@ import {
   IconPlus,
   IconRefresh,
   IconSignature,
+  IconTrash,
 } from '@tabler/icons-react';
 import {
   safeUuid,
   type IntakePayload,
+  type CargoContentItem,
+  type CollectPayload,
   outboxList,
   outboxPut,
   outboxUpdateStatus,
@@ -91,6 +97,7 @@ function makeBlankForm(): IntakePayload {
     pickupContactPhone: null,
     notes: null,
     quantity: null,
+    cargoContents: [],
     weightKg: null,
     lengthCm: null,
     widthCm: null,
@@ -234,7 +241,9 @@ function OutboxCard({
   const cc = getCountryCode(dest);
   const flag = countryFlag(cc);
   const isSynced = item.status === 'synced';
-  const trackingCode: string | undefined = item.server?.trackingCode;
+  const trackingCode: string | undefined =
+    item.server?.trackingCode ??
+    (item.kind === 'collect_existing' ? (item.payload as any)?.trackingCode : undefined);
 
   return (
     <Card withBorder radius="md" py="sm" px="md">
@@ -303,6 +312,21 @@ function OutboxCard({
   );
 }
 
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+type LookupResult =
+  | { found: false }
+  | {
+      found: true;
+      shipmentId: string;
+      trackingCode: string;
+      customerName: string;
+      destination: string;
+      serviceType: string;
+      cargoType: string;
+      cargoMeta: Record<string, unknown>;
+    };
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 export function FieldIntakeClient() {
@@ -316,6 +340,12 @@ export function FieldIntakeClient() {
   const [phoneBlurred, setPhoneBlurred] = useState(false);
   const [showOptional, setShowOptional] = useState(false);
   const [sigOpen, setSigOpen] = useState(false);
+
+  // Pre-booked collection state
+  const [collectMode, setCollectMode] = useState<'new' | 'pre_booked'>('new');
+  const [codeInput, setCodeInput] = useState('');
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupResult, setLookupResult] = useState<LookupResult | null>(null);
 
   const photoRef = useRef<HTMLInputElement>(null);
   const syncingRef = useRef(false);
@@ -343,7 +373,7 @@ export function FieldIntakeClient() {
 
   async function reloadOutbox() {
     try {
-      const list = await outboxList('intake_create');
+      const list = await outboxList();
       setItems(list);
     } catch (e: any) {
       console.warn('[outboxList] failed', e?.message ?? e);
@@ -356,7 +386,7 @@ export function FieldIntakeClient() {
     if (!canSync) return;
     if (manageBusy) setBusy(true);
     try {
-      const target = (await outboxList('intake_create')).find(x => x.id === id);
+      const target = (await outboxList()).find(x => x.id === id);
       if (!target) return;
       await outboxUpdateStatus(id, { status: 'syncing', error: null });
       await reloadOutbox();
@@ -365,7 +395,8 @@ export function FieldIntakeClient() {
       fd.set('payload', JSON.stringify(target.payload ?? {}));
       for (const f of target.photos ?? []) fd.append('photos', f);
       if (target.signature) fd.set('signature', target.signature);
-      const res = await fetch('/api/field/intake', { method: 'POST', body: fd });
+      const endpoint = target.kind === 'collect_existing' ? '/api/field/collect' : '/api/field/intake';
+      const res = await fetch(endpoint, { method: 'POST', body: fd });
       const json = await res.json().catch(() => ({} as any));
       if (!res.ok) {
         const msg = json?.error || `Request failed (${res.status})`;
@@ -381,9 +412,10 @@ export function FieldIntakeClient() {
       });
       await reloadOutbox();
       if (!silent) {
+        const verb = target.kind === 'collect_existing' ? 'Collected' : 'Created shipment';
         notifications.show({
           title: 'Synced',
-          message: `Created shipment ${json.trackingCode ?? ''}`.trim(),
+          message: `${verb} ${json.trackingCode ?? ''}`.trim(),
           color: 'green',
         });
       }
@@ -405,7 +437,7 @@ export function FieldIntakeClient() {
     syncingRef.current = true;
     setBusy(true);
     try {
-      const list = await outboxList('intake_create');
+      const list = await outboxList();
       const pend = list.filter(x => x.status === 'pending' || (includeFailed && x.status === 'failed'));
       autoSyncArmedRef.current = false;
       for (const it of pend) {
@@ -482,6 +514,15 @@ export function FieldIntakeClient() {
       pickupContactPhone: normOptStr(form.pickupContactPhone),
       notes: normOptStr(form.notes),
       quantity: numOrNull(form.quantity),
+      cargoContents: showQuantity
+        ? (form.cargoContents ?? [])
+            .filter((c: CargoContentItem) => c.category)
+            .map((c: CargoContentItem) => ({
+              category: c.category,
+              description: c.description?.trim() || undefined,
+              qty: c.qty > 0 ? c.qty : 1,
+            }))
+        : null,
       weightKg: numOrNull(form.weightKg),
       lengthCm: numOrNull(form.lengthCm),
       widthCm: numOrNull(form.widthCm),
@@ -519,7 +560,137 @@ export function FieldIntakeClient() {
     }
   }
 
+  function handleModeChange(mode: 'new' | 'pre_booked') {
+    setCollectMode(mode);
+    setCodeInput('');
+    setLookupResult(null);
+    setPhotos([]);
+    setSignature(null);
+  }
+
+  async function handleLookup() {
+    const code = codeInput.trim().toUpperCase();
+    if (!code) return;
+    setLookupLoading(true);
+    setLookupResult(null);
+    try {
+      const res = await fetch(`/api/field/lookup?code=${encodeURIComponent(code)}`, { cache: 'no-store' });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        notifications.show({ title: 'Lookup failed', message: json?.error ?? `Error ${res.status}`, color: 'red' });
+        return;
+      }
+      setLookupResult(json as LookupResult);
+    } catch (e: any) {
+      notifications.show({ title: 'Lookup failed', message: e?.message ?? 'Network error', color: 'red' });
+    } finally {
+      setLookupLoading(false);
+    }
+  }
+
+  async function savePreBookedToOutbox() {
+    if (!lookupResult?.found) {
+      notifications.show({ title: 'No shipment selected', message: 'Look up a tracking code first', color: 'red' });
+      return;
+    }
+    const r = lookupResult as Extract<LookupResult, { found: true }>;
+
+    const payload: CollectPayload = {
+      shipmentId: r.shipmentId,
+      trackingCode: r.trackingCode,
+      customerName: r.customerName,
+      destination: r.destination,
+      occurredAtISO: new Date().toISOString(),
+    };
+
+    const id = safeUuid();
+    await outboxPut({
+      id,
+      kind: 'collect_existing',
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      payload,
+      photos: photos ?? [],
+      signature,
+    });
+
+    notifications.show({
+      title: 'Saved to outbox',
+      message: canSync ? 'Syncing…' : "Will sync when you're back online",
+      color: 'teal',
+    });
+
+    setCodeInput('');
+    setLookupResult(null);
+    setPhotos([]);
+    setSignature(null);
+    await reloadOutbox();
+
+    if (canSync) {
+      autoSyncArmedRef.current = true;
+      void syncOne(id);
+    }
+  }
+
   const pendingLabel = pendingOnlyCount + failedCount;
+
+  // Shared photo + signature capture section (used in both modes)
+  const photoSigSection = (
+    <SimpleGrid cols={2} spacing="sm">
+      <UnstyledButton onClick={() => photoRef.current?.click()} style={{ display: 'block', width: '100%' }}>
+        <Box
+          style={{
+            border: `2px ${photos.length > 0 ? 'solid' : 'dashed'} ${photos.length > 0 ? 'var(--mantine-color-green-5)' : 'var(--mantine-color-gray-4)'}`,
+            borderRadius: 8,
+            background: photos.length > 0 ? 'var(--mantine-color-green-0)' : 'transparent',
+            padding: '16px 8px',
+            minHeight: 90,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 4,
+            cursor: 'pointer',
+          }}
+        >
+          <IconCamera size={24} color={photos.length > 0 ? 'var(--mantine-color-green-6)' : 'var(--mantine-color-gray-5)'} />
+          {photos.length > 0 ? (
+            <>
+              <Text size="sm" fw={600} c="green">{photos.length} photo{photos.length > 1 ? 's' : ''}</Text>
+              <Text size="xs" c="dimmed">Tap to add more</Text>
+            </>
+          ) : (
+            <Text size="sm" c="dimmed">Add photos</Text>
+          )}
+        </Box>
+      </UnstyledButton>
+
+      <UnstyledButton onClick={() => setSigOpen(true)} style={{ display: 'block', width: '100%' }}>
+        <Box
+          style={{
+            border: `2px ${signature ? 'solid' : 'dashed'} ${signature ? 'var(--mantine-color-green-5)' : 'var(--mantine-color-gray-4)'}`,
+            borderRadius: 8,
+            background: signature ? 'var(--mantine-color-green-0)' : 'transparent',
+            padding: '16px 8px',
+            minHeight: 90,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 4,
+            cursor: 'pointer',
+          }}
+        >
+          <IconSignature size={24} color={signature ? 'var(--mantine-color-green-6)' : 'var(--mantine-color-gray-5)'} />
+          {signature ? (
+            <Text size="sm" fw={600} c="green">Signed</Text>
+          ) : (
+            <Text size="sm" c="dimmed">Add signature</Text>
+          )}
+        </Box>
+      </UnstyledButton>
+    </SimpleGrid>
+  );
 
   return (
     <>
@@ -558,6 +729,18 @@ export function FieldIntakeClient() {
         {/* Form card */}
         <Card withBorder radius="md" p="md">
           <Stack gap="sm">
+            <SegmentedControl
+              value={collectMode}
+              onChange={v => handleModeChange(v as 'new' | 'pre_booked')}
+              data={[
+                { label: 'New collection', value: 'new' },
+                { label: 'Collect pre-booked', value: 'pre_booked' },
+              ]}
+              fullWidth
+            />
+
+            {/* ── New collection ─────────────────────────────────────── */}
+            {collectMode === 'new' && (<>
             <Text size="xs" fw={600} c="dimmed" style={{ letterSpacing: '0.08em', textTransform: 'uppercase' }}>
               Customer info
             </Text>
@@ -567,7 +750,10 @@ export function FieldIntakeClient() {
               required
               placeholder="e.g. Andre Brown"
               value={form.customerName}
-              onChange={e => setForm(p => ({ ...p, customerName: e.currentTarget.value }))}
+             onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, customerName: value }));
+}}
             />
 
             {/* Phone — free-text, monospace, digit validation */}
@@ -644,6 +830,94 @@ export function FieldIntakeClient() {
               />
             )}
 
+            {/* Contents (barrel/box) */}
+            {showQuantity && (
+              <Paper withBorder p="sm" radius="md">
+                <Stack gap="sm">
+                  <Group justify="space-between">
+                    <Text fw={600} size="sm">Contents</Text>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      leftSection={<IconPlus size={12} />}
+                      onClick={() =>
+                        setForm(p => ({
+                          ...p,
+                          cargoContents: [
+                            ...(p.cargoContents ?? []),
+                            { category: 'Clothing', description: '', qty: 1 },
+                          ],
+                        }))
+                      }
+                    >
+                      Add item
+                    </Button>
+                  </Group>
+
+                  {(form.cargoContents ?? []).length === 0 && (
+                    <Text size="xs" c="dimmed">No contents added. Tap "Add item" to list what's inside.</Text>
+                  )}
+
+                  {(form.cargoContents ?? []).map((item, i) => (
+                    <Group key={i} align="flex-end" gap="xs" wrap="nowrap">
+                      <Select
+                        label="Category"
+                        value={item.category}
+                        onChange={v => {
+                          const updated = [...(form.cargoContents ?? [])];
+                          updated[i] = { ...updated[i], category: v ?? 'Clothing' };
+                          setForm(p => ({ ...p, cargoContents: updated }));
+                        }}
+                        data={[
+                          'Clothing',
+                          'Food & Groceries',
+                          'Electronics',
+                          'Household Goods',
+                          'Personal Care',
+                          'Documents',
+                          'Other',
+                        ]}
+                        style={{ flex: 2, minWidth: 0 }}
+                      />
+                      <TextInput
+                        label="Description"
+                        placeholder="e.g. jeans, tinned food"
+                        value={item.description ?? ''}
+                        onChange={e => {
+                          const updated = [...(form.cargoContents ?? [])];
+                          updated[i] = { ...updated[i], description: e.currentTarget.value };
+                          setForm(p => ({ ...p, cargoContents: updated }));
+                        }}
+                        style={{ flex: 3, minWidth: 0 }}
+                      />
+                      <NumberInput
+                        label="Qty"
+                        min={1}
+                        value={item.qty}
+                        onChange={v => {
+                          const updated = [...(form.cargoContents ?? [])];
+                          updated[i] = { ...updated[i], qty: typeof v === 'number' && v > 0 ? v : 1 };
+                          setForm(p => ({ ...p, cargoContents: updated }));
+                        }}
+                        style={{ width: 70, flexShrink: 0 }}
+                      />
+                      <ActionIcon
+                        color="red"
+                        variant="subtle"
+                        mb={1}
+                        onClick={() => {
+                          const updated = (form.cargoContents ?? []).filter((_, idx) => idx !== i);
+                          setForm(p => ({ ...p, cargoContents: updated }));
+                        }}
+                      >
+                        <IconTrash size={16} />
+                      </ActionIcon>
+                    </Group>
+                  ))}
+                </Stack>
+              </Paper>
+            )}
+
             {/* Dimensions (crate/pallet/machinery) */}
             {showDims && (
               <Paper withBorder p="sm" radius="md">
@@ -660,8 +934,14 @@ export function FieldIntakeClient() {
                     <NumberInput label="Width (cm)" min={0} value={form.widthCm ?? ''} onChange={v => setForm(p => ({ ...p, widthCm: typeof v === 'number' ? v : null }))} />
                     <NumberInput label="Height (cm)" min={0} value={form.heightCm ?? ''} onChange={v => setForm(p => ({ ...p, heightCm: typeof v === 'number' ? v : null }))} />
                   </Group>
-                  <Checkbox label="Forklift required" checked={Boolean(form.forkliftRequired)} onChange={e => setForm(p => ({ ...p, forkliftRequired: e.currentTarget.checked }))} />
-                  <Textarea label="Handling notes (optional)" minRows={2} value={form.handlingNotes ?? ''} onChange={e => setForm(p => ({ ...p, handlingNotes: e.currentTarget.value }))} />
+                  <Checkbox label="Forklift required" checked={Boolean(form.forkliftRequired)} onChange={e => {
+  const checked = e.currentTarget.checked;
+  setForm(p => ({ ...p, forkliftRequired: checked }));
+}}/>
+                  <Textarea label="Handling notes (optional)" minRows={2} value={form.handlingNotes ?? ''} onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, handlingNotes: value }));
+}} />
                 </Stack>
               </Paper>
             )}
@@ -672,13 +952,28 @@ export function FieldIntakeClient() {
                 <Stack gap="sm">
                   <Text fw={600} size="sm">Vehicle details</Text>
                   <Group grow>
-                    <TextInput label="Make" value={form.vehicleMake ?? ''} onChange={e => setForm(p => ({ ...p, vehicleMake: e.currentTarget.value }))} />
-                    <TextInput label="Model" value={form.vehicleModel ?? ''} onChange={e => setForm(p => ({ ...p, vehicleModel: e.currentTarget.value }))} />
-                    <TextInput label="Year" value={form.vehicleYear ?? ''} onChange={e => setForm(p => ({ ...p, vehicleYear: e.currentTarget.value }))} />
+                    <TextInput label="Make" value={form.vehicleMake ?? ''}onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, vehicleMake: value }));
+}}/>
+                    <TextInput label="Model" value={form.vehicleModel ?? ''}onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, vehicleMake: value }));
+}}/>
+                    <TextInput label="Year" value={form.vehicleYear ?? ''} onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, vehicleYear: value }));
+}} />
                   </Group>
                   <Group grow>
-                    <TextInput label="VIN" value={form.vehicleVin ?? ''} onChange={e => setForm(p => ({ ...p, vehicleVin: e.currentTarget.value }))} />
-                    <TextInput label="Reg" value={form.vehicleReg ?? ''} onChange={e => setForm(p => ({ ...p, vehicleReg: e.currentTarget.value }))} />
+                    <TextInput label="VIN" value={form.vehicleVin ?? ''} onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, vehicleVin: value }));
+}} />
+                    <TextInput label="Reg" value={form.vehicleReg ?? ''} onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, vehicleReg: value }));
+}} />
                   </Group>
                   <Checkbox label="Keys received" checked={Boolean(form.keysReceived)} onChange={e => { const c = e.currentTarget.checked; setForm(p => ({ ...p, keysReceived: c, vehicleKeysReceived: c })); }} />
                   <Textarea label="Handling notes (optional)" minRows={2} value={form.handlingNotes ?? ''} onChange={e => setForm(p => ({ ...p, handlingNotes: e.currentTarget.value }))} />
@@ -687,60 +982,7 @@ export function FieldIntakeClient() {
             )}
 
             {/* Photo + Signature cards */}
-            <SimpleGrid cols={2} spacing="sm">
-              <UnstyledButton onClick={() => photoRef.current?.click()} style={{ display: 'block', width: '100%' }}>
-                <Box
-                  style={{
-                    border: `2px ${photos.length > 0 ? 'solid' : 'dashed'} ${photos.length > 0 ? 'var(--mantine-color-green-5)' : 'var(--mantine-color-gray-4)'}`,
-                    borderRadius: 8,
-                    background: photos.length > 0 ? 'var(--mantine-color-green-0)' : 'transparent',
-                    padding: '16px 8px',
-                    minHeight: 90,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 4,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <IconCamera size={24} color={photos.length > 0 ? 'var(--mantine-color-green-6)' : 'var(--mantine-color-gray-5)'} />
-                  {photos.length > 0 ? (
-                    <>
-                      <Text size="sm" fw={600} c="green">{photos.length} photo{photos.length > 1 ? 's' : ''}</Text>
-                      <Text size="xs" c="dimmed">Tap to add more</Text>
-                    </>
-                  ) : (
-                    <Text size="sm" c="dimmed">Add photos</Text>
-                  )}
-                </Box>
-              </UnstyledButton>
-
-              <UnstyledButton onClick={() => setSigOpen(true)} style={{ display: 'block', width: '100%' }}>
-                <Box
-                  style={{
-                    border: `2px ${signature ? 'solid' : 'dashed'} ${signature ? 'var(--mantine-color-green-5)' : 'var(--mantine-color-gray-4)'}`,
-                    borderRadius: 8,
-                    background: signature ? 'var(--mantine-color-green-0)' : 'transparent',
-                    padding: '16px 8px',
-                    minHeight: 90,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 4,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <IconSignature size={24} color={signature ? 'var(--mantine-color-green-6)' : 'var(--mantine-color-gray-5)'} />
-                  {signature ? (
-                    <Text size="sm" fw={600} c="green">Signed</Text>
-                  ) : (
-                    <Text size="sm" c="dimmed">Add signature</Text>
-                  )}
-                </Box>
-              </UnstyledButton>
-            </SimpleGrid>
+            {photoSigSection}
 
             {/* Optional fields toggle */}
             <UnstyledButton onClick={() => setShowOptional(v => !v)}>
@@ -759,30 +1001,123 @@ export function FieldIntakeClient() {
                   label="Pickup address"
                   placeholder="Street, city"
                   value={form.pickupAddress ?? ''}
-                  onChange={e => setForm(p => ({ ...p, pickupAddress: e.currentTarget.value }))}
+                 onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, pickupAddress: value }));
+}}
                 />
                 <Textarea
                   label="Notes"
                   minRows={2}
                   value={form.notes ?? ''}
-                  onChange={e => setForm(p => ({ ...p, notes: e.currentTarget.value }))}
+                  onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, notes: value }));
+}}
                 />
                 <TextInput
                   label="Pickup contact phone"
                   placeholder="If different from customer"
                   inputMode="tel"
                   value={form.pickupContactPhone ?? ''}
-                  onChange={e => setForm(p => ({ ...p, pickupContactPhone: e.currentTarget.value }))}
+                 onChange={e => {
+  const value = e.currentTarget.value;
+  setForm(p => ({ ...p, pickupContactPhone: value }));
+}}
                 />
               </Stack>
             </Collapse>
+            </>)}
+
+            {/* ── Collect pre-booked ─────────────────────────────────── */}
+            {collectMode === 'pre_booked' && (
+              <Stack gap="sm">
+                <Group gap="xs" align="flex-end">
+                  <TextInput
+                    label="Tracking code"
+                    placeholder="SHP-XXXXXX"
+                    value={codeInput}
+                    onChange={e => setCodeInput(e.currentTarget.value.toUpperCase())}
+                    onKeyDown={e => { if (e.key === 'Enter') void handleLookup(); }}
+                    styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)', textTransform: 'uppercase' } }}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    loading={lookupLoading}
+                    disabled={!codeInput.trim() || lookupLoading}
+                    onClick={() => void handleLookup()}
+                  >
+                    Look up
+                  </Button>
+                </Group>
+
+                {lookupResult && !lookupResult.found && (
+                  <Text size="sm" c="red">No shipment found with that code.</Text>
+                )}
+
+                {lookupResult?.found && (
+                  <Stack gap="sm">
+                    <Paper withBorder p="sm" radius="md" style={{ background: 'var(--mantine-color-gray-0)' }}>
+                      <Stack gap="xs">
+                        <Text size="xs" fw={600} c="dimmed" style={{ letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                          Shipment details
+                        </Text>
+                        <Group justify="space-between">
+                          <Text size="sm" c="dimmed">Customer</Text>
+                          <Text size="sm" fw={600}>{lookupResult.customerName}</Text>
+                        </Group>
+                        <Group justify="space-between">
+                          <Text size="sm" c="dimmed">Tracking</Text>
+                          <Text size="sm" fw={600} ff="monospace">{lookupResult.trackingCode}</Text>
+                        </Group>
+                        <Group justify="space-between">
+                          <Text size="sm" c="dimmed">Destination</Text>
+                          <Text size="sm" fw={600}>
+                            {countryFlag(getCountryCode(lookupResult.destination))} {lookupResult.destination}
+                          </Text>
+                        </Group>
+                        <Group justify="space-between">
+                          <Text size="sm" c="dimmed">Service</Text>
+                          <Text size="sm" fw={600}>
+                            {lookupResult.serviceType === 'door_to_door' ? 'Door to Door' : 'Depot'}
+                          </Text>
+                        </Group>
+                        <Group justify="space-between">
+                          <Text size="sm" c="dimmed">Cargo</Text>
+                          <Text size="sm" fw={600}>{toTitleCase(lookupResult.cargoType)}</Text>
+                        </Group>
+                        {lookupResult.cargoMeta?.quantity != null && (
+                          <Group justify="space-between">
+                            <Text size="sm" c="dimmed">Quantity</Text>
+                            <Text size="sm" fw={600}>{String(lookupResult.cargoMeta.quantity)}</Text>
+                          </Group>
+                        )}
+                      </Stack>
+                    </Paper>
+
+                    {photoSigSection}
+                  </Stack>
+                )}
+              </Stack>
+            )}
           </Stack>
         </Card>
 
         {/* Action buttons */}
-        <Button size="md" fullWidth onClick={saveToOutbox} disabled={busy}>
-          Save to outbox
-        </Button>
+        {collectMode === 'new' ? (
+          <Button size="md" fullWidth onClick={saveToOutbox} disabled={busy}>
+            Save to outbox
+          </Button>
+        ) : (
+          <Button
+            size="md"
+            fullWidth
+            onClick={() => void savePreBookedToOutbox()}
+            disabled={busy || !lookupResult?.found}
+          >
+            Save collection
+          </Button>
+        )}
         <Button
           size="sm"
           fullWidth

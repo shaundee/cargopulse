@@ -186,6 +186,17 @@ export async function POST(req: Request) {
 
   if (cargoTypeSafe === 'barrel' || cargoTypeSafe === 'box') {
     if (Number.isFinite(quantity as any)) cargoMeta.quantity = quantity;
+
+    const rawContents = (payload as any).cargoContents;
+    if (Array.isArray(rawContents) && rawContents.length > 0) {
+      cargoMeta.contents = rawContents
+        .filter((c: any) => c && typeof c.category === 'string' && c.category)
+        .map((c: any) => ({
+          category: String(c.category),
+          ...(c.description ? { description: String(c.description) } : {}),
+          qty: typeof c.qty === 'number' && c.qty > 0 ? c.qty : 1,
+        }));
+    }
   }
 
   if (cargoTypeSafe === 'crate' || cargoTypeSafe === 'pallet' || cargoTypeSafe === 'machinery') {

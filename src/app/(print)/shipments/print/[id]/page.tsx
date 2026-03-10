@@ -415,6 +415,31 @@ export default async function ShipmentPrintPage({
           </>
         )}
 
+        {/* ── Packing list ── */}
+        {Array.isArray(meta.contents) && meta.contents.length > 0 && (
+          <>
+            <div className="section-heading">Packing list</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, marginBottom: 10 }}>
+              <thead>
+                <tr style={{ background: '#f5f5f5' }}>
+                  <th style={{ border: '1px solid #ddd', padding: '4px 8px', textAlign: 'left', fontWeight: 700 }}>Category</th>
+                  <th style={{ border: '1px solid #ddd', padding: '4px 8px', textAlign: 'left', fontWeight: 700 }}>Description</th>
+                  <th style={{ border: '1px solid #ddd', padding: '4px 8px', textAlign: 'right', fontWeight: 700 }}>Qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(meta.contents as Array<{ category: string; description?: string | null; qty: number }>).map((c, i) => (
+                  <tr key={i}>
+                    <td style={{ border: '1px solid #ddd', padding: '4px 8px' }}>{c.category}</td>
+                    <td style={{ border: '1px solid #ddd', padding: '4px 8px', color: '#555' }}>{c.description || '—'}</td>
+                    <td style={{ border: '1px solid #ddd', padding: '4px 8px', textAlign: 'right' }}>{c.qty}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+
         {/* ── Internal notes ── */}
         {s.internal_notes && (
           <>

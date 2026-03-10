@@ -35,6 +35,33 @@ if (blocked) return blocked;
   const initialChargePence = Math.max(0, Math.trunc(Number(body?.initial_charge_pence ?? 0)));
 const depositPaidPence = Math.max(0, Math.trunc(Number(body?.deposit_paid_pence ?? 0)));
 
+  const CARGO_ALLOWED = new Set(['general', 'barrel', 'box', 'crate', 'pallet', 'vehicle', 'machinery', 'mixed', 'other']);
+  const PACKING_CATS = new Set(['Clothing', 'Food & Groceries', 'Electronics', 'Household Goods', 'Personal Care', 'Documents', 'Other']);
+  const cargoTypeRaw = String(body?.cargoType ?? 'general');
+  const cargoType = CARGO_ALLOWED.has(cargoTypeRaw) ? cargoTypeRaw : 'general';
+
+  const cargoMetaRaw = body?.cargoMeta && typeof body.cargoMeta === 'object' ? body.cargoMeta as Record<string, unknown> : {};
+  const cargoMeta: Record<string, unknown> = {};
+
+  if (cargoType === 'barrel' || cargoType === 'box') {
+    const qty = cargoMetaRaw.quantity;
+    if (qty !== null && qty !== undefined) {
+      const n = Number(qty);
+      if (Number.isFinite(n) && n >= 0) cargoMeta.quantity = Math.trunc(n);
+    }
+    const rawContents = cargoMetaRaw.contents;
+    if (Array.isArray(rawContents) && rawContents.length > 0) {
+      const sanitised = rawContents
+        .filter((c: any) => c && PACKING_CATS.has(String(c.category ?? '')))
+        .map((c: any) => ({
+          category: String(c.category),
+          description: String(c.description ?? '').trim() || null,
+          qty: Math.max(1, Math.trunc(Number(c.qty) || 1)),
+        }));
+      if (sanitised.length > 0) cargoMeta.contents = sanitised;
+    }
+  }
+
 
   if (customerName.length < 2) return NextResponse.json({ error: 'Customer name too short' }, { status: 400 });
 
@@ -91,6 +118,8 @@ if (!phoneE164) return NextResponse.json({ error: 'Phone must be valid (E.164). 
       service_type: serviceType,
       current_status: 'received',
       last_event_at: new Date().toISOString(),
+      cargo_type: cargoType,
+      cargo_meta: cargoMeta,
     })
     .select('id, tracking_code')
     .single();

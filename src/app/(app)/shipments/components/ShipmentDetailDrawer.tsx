@@ -2,13 +2,18 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ActionIcon,
   Badge,
+  Button,
   Drawer,
   Group,
   Image,
+  NumberInput,
   Paper,
+  Select,
   SimpleGrid,
   Stack,
+  Table,
   Tabs,
   Text,
   Title,
@@ -17,10 +22,13 @@ import { notifications } from '@mantine/notifications';
 import {
   IconCheck,
   IconCopy,
+  IconPencil,
   IconPhone,
   IconPrinter,
   IconX,
 } from '@tabler/icons-react';
+import { type PackingItem } from '@/lib/offline/outbox';
+import { PackingListEditor } from './PackingListEditor';
 
 import type {
   MessageLogRow,
@@ -114,6 +122,13 @@ export function ShipmentDetailDrawer({
   const [assets, setAssets] = useState<Array<{ id: string; kind: string; url: string | null; created_at: string }>>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
 
+  // Cargo edit
+  const [cargoEditing, setCargoEditing] = useState(false);
+  const [editCargoType, setEditCargoType] = useState('general');
+  const [editQty, setEditQty] = useState<number | null>(null);
+  const [editItems, setEditItems] = useState<PackingItem[]>([]);
+  const [cargoSaving, setCargoSaving] = useState(false);
+
   // Header actions
   const [origin, setOrigin] = useState('');
   const [copied, setCopied] = useState(false);
@@ -188,6 +203,7 @@ export function ShipmentDetailDrawer({
     setTemplates([]);
     setPodReceiver('');
     setPodFile(null);
+    setCargoEditing(false);
 
     try {
       const res = await fetch(`/api/shipments/detail?shipment_id=${encodeURIComponent(id)}`, { cache: 'no-store' });
@@ -338,6 +354,87 @@ export function ShipmentDetailDrawer({
   // Panel sub-components
   // ----------------------------
 
+  const CARGO_TYPES_EDIT = [
+    { value: 'general', label: 'General' },
+    { value: 'barrel', label: 'Barrel' },
+    { value: 'box', label: 'Box' },
+    { value: 'crate', label: 'Crate' },
+    { value: 'pallet', label: 'Pallet' },
+    { value: 'vehicle', label: 'Vehicle' },
+    { value: 'machinery', label: 'Machinery' },
+    { value: 'mixed', label: 'Mixed' },
+    { value: 'other', label: 'Other' },
+  ];
+
+  function startCargoEdit() {
+    const m = (detailShipment as any)?.cargo_meta ?? {};
+    setEditCargoType((detailShipment as any)?.cargo_type ?? 'general');
+    setEditQty(m.quantity != null ? Number(m.quantity) : null);
+    setEditItems(
+      Array.isArray(m.contents)
+        ? m.contents.map((c: any) => ({
+            category: c.category ?? 'Other',
+            description: c.description ?? '',
+            qty: c.qty ?? 1,
+          }))
+        : [],
+    );
+    setCargoEditing(true);
+  }
+
+  async function saveCargoEdit() {
+    if (!detailShipment) return;
+    setCargoSaving(true);
+    try {
+      const m = (detailShipment as any)?.cargo_meta ?? {};
+      const showPacking = editCargoType === 'barrel' || editCargoType === 'box';
+
+      // Preserve existing non-packing fields; overlay packing edits
+      const cargoMeta: Record<string, unknown> = { ...m };
+      if (showPacking && editQty != null) {
+        cargoMeta.quantity = editQty;
+      } else {
+        delete cargoMeta.quantity;
+      }
+      if (showPacking) {
+        const sanitised = editItems
+          .filter(c => c.category)
+          .map(c => ({
+            category: c.category,
+            description: c.description?.trim() || null,
+            qty: Math.max(1, c.qty),
+          }));
+        if (sanitised.length > 0) cargoMeta.contents = sanitised;
+        else delete cargoMeta.contents;
+      } else {
+        delete cargoMeta.contents;
+      }
+
+      const res = await fetch(`/api/shipments/${detailShipment.id}/cargo`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cargoType: editCargoType, cargoMeta }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        notifications.show({
+          title: 'Save failed',
+          message: json?.error ?? `Error ${res.status}`,
+          color: 'red',
+        });
+        return;
+      }
+      notifications.show({ title: 'Cargo updated', message: 'Changes saved', color: 'green' });
+      setCargoEditing(false);
+      onReloadRequested();
+      await loadDetail(detailShipment.id);
+    } catch (e: any) {
+      notifications.show({ title: 'Save failed', message: e?.message ?? 'Request failed', color: 'red' });
+    } finally {
+      setCargoSaving(false);
+    }
+  }
+
   function CargoDetailsPanel({ shipment }: { shipment: ShipmentDetail }) {
     const cargoType = (shipment as any)?.cargo_type ?? null;
     const meta = (shipment as any)?.cargo_meta ?? null;
@@ -355,59 +452,143 @@ export function ShipmentDetailDrawer({
     );
 
     const qty = (m as any).quantity;
+    const contents: Array<{ category: string; description?: string; qty: number }> | null =
+      Array.isArray((m as any).contents) && (m as any).contents.length > 0 ? (m as any).contents : null;
     const dims = (m as any).dimensions;
     const veh = (m as any).vehicle;
+
+    const editShowPacking = editCargoType === 'barrel' || editCargoType === 'box';
 
     return (
       <Stack gap="sm">
         <Paper withBorder p="sm" radius="md">
           <Stack gap="xs">
-            <Text fw={700}>Cargo details</Text>
+            <Group justify="space-between" align="center">
+              <Text fw={700}>Cargo details</Text>
+              {!cargoEditing && (
+                <ActionIcon variant="subtle" size="sm" title="Edit cargo" onClick={startCargoEdit}>
+                  <IconPencil size={14} />
+                </ActionIcon>
+              )}
+            </Group>
 
-            <Row label="Type" value={cargoType ? String(cargoType) : '-'} />
-            {(m as any).pickup_address ? <Row label="Pickup address" value={(m as any).pickup_address} /> : null}
-            {(m as any).pickup_contact_phone ? <Row label="Pickup contact" value={(m as any).pickup_contact_phone} /> : null}
-            {(m as any).notes ? <Row label="Notes" value={(m as any).notes} /> : null}
-            {qty != null ? <Row label="Quantity" value={String(qty)} /> : null}
+            {/* ── Edit mode ── */}
+            {cargoEditing ? (
+              <Stack gap="sm" pt="xs">
+                <Select
+                  label="Cargo type"
+                  value={editCargoType}
+                  onChange={v => {
+                    setEditCargoType(v ?? 'general');
+                    setEditQty(null);
+                    setEditItems([]);
+                  }}
+                  data={CARGO_TYPES_EDIT}
+                />
 
-            {dims && typeof dims === 'object' ? (
-              <Paper withBorder p="xs" radius="md">
-                <Stack gap="xs">
-                  <Text size="sm" fw={700}>Dimensions</Text>
-                  <Row label="Weight (kg)" value={(dims as any).weight_kg ?? '-'} />
-                  <Row label="Length (cm)" value={(dims as any).length_cm ?? '-'} />
-                  <Row label="Width (cm)" value={(dims as any).width_cm ?? '-'} />
-                  <Row label="Height (cm)" value={(dims as any).height_cm ?? '-'} />
-                  <Row
-                    label="Forklift required"
-                    value={(dims as any).forklift_required == null ? '-' : (dims as any).forklift_required ? 'Yes' : 'No'}
+                {editShowPacking && (
+                  <NumberInput
+                    label="Quantity"
+                    min={0}
+                    placeholder="e.g. 3"
+                    value={editQty ?? ''}
+                    onChange={v => setEditQty(typeof v === 'number' ? v : null)}
                   />
-                  {(dims as any).handling_notes ? <Row label="Handling notes" value={(dims as any).handling_notes} /> : null}
-                </Stack>
-              </Paper>
-            ) : null}
+                )}
 
-            {veh && typeof veh === 'object' ? (
-              <Paper withBorder p="xs" radius="md">
-                <Stack gap="xs">
-                  <Text size="sm" fw={700}>Vehicle</Text>
-                  {(veh as any).make ? <Row label="Make" value={(veh as any).make} /> : null}
-                  {(veh as any).model ? <Row label="Model" value={(veh as any).model} /> : null}
-                  {(veh as any).year ? <Row label="Year" value={(veh as any).year} /> : null}
-                  {(veh as any).reg ? <Row label="Reg" value={(veh as any).reg} /> : null}
-                  {(veh as any).vin ? <Row label="VIN" value={(veh as any).vin} /> : null}
-                  <Row
-                    label="Keys received"
-                    value={(veh as any).keys_received == null ? '-' : (veh as any).keys_received ? 'Yes' : 'No'}
-                  />
-                  {(veh as any).handling_notes ? <Row label="Handling notes" value={(veh as any).handling_notes} /> : null}
-                </Stack>
-              </Paper>
-            ) : null}
+                {editShowPacking && (
+                  <PackingListEditor items={editItems} onChange={setEditItems} />
+                )}
 
-            {!cargoType && qty == null && !dims && !veh && !(m as any).pickup_address && !(m as any).pickup_contact_phone && !(m as any).notes ? (
-              <Text size="sm" c="dimmed">No cargo details recorded.</Text>
-            ) : null}
+                <Group justify="flex-end" gap="xs" pt="xs">
+                  <Button
+                    variant="default"
+                    size="xs"
+                    disabled={cargoSaving}
+                    onClick={() => setCargoEditing(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button size="xs" loading={cargoSaving} onClick={saveCargoEdit}>
+                    Save
+                  </Button>
+                </Group>
+              </Stack>
+            ) : (
+              /* ── Read-only mode ── */
+              <>
+                <Row label="Type" value={cargoType ? String(cargoType) : '-'} />
+                {(m as any).pickup_address ? <Row label="Pickup address" value={(m as any).pickup_address} /> : null}
+                {(m as any).pickup_contact_phone ? <Row label="Pickup contact" value={(m as any).pickup_contact_phone} /> : null}
+                {(m as any).notes ? <Row label="Notes" value={(m as any).notes} /> : null}
+                {qty != null ? <Row label="Quantity" value={String(qty)} /> : null}
+
+                {contents ? (
+                  <Paper withBorder p="xs" radius="md">
+                    <Stack gap="xs">
+                      <Text size="sm" fw={700}>Contents</Text>
+                      <Table striped withTableBorder withColumnBorders fz="sm">
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Category</Table.Th>
+                            <Table.Th>Description</Table.Th>
+                            <Table.Th style={{ textAlign: 'right' }}>Qty</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {contents.map((c, i) => (
+                            <Table.Tr key={i}>
+                              <Table.Td>{c.category}</Table.Td>
+                              <Table.Td c="dimmed">{c.description || '—'}</Table.Td>
+                              <Table.Td style={{ textAlign: 'right' }}>{c.qty}</Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </Stack>
+                  </Paper>
+                ) : null}
+
+                {dims && typeof dims === 'object' ? (
+                  <Paper withBorder p="xs" radius="md">
+                    <Stack gap="xs">
+                      <Text size="sm" fw={700}>Dimensions</Text>
+                      <Row label="Weight (kg)" value={(dims as any).weight_kg ?? '-'} />
+                      <Row label="Length (cm)" value={(dims as any).length_cm ?? '-'} />
+                      <Row label="Width (cm)" value={(dims as any).width_cm ?? '-'} />
+                      <Row label="Height (cm)" value={(dims as any).height_cm ?? '-'} />
+                      <Row
+                        label="Forklift required"
+                        value={(dims as any).forklift_required == null ? '-' : (dims as any).forklift_required ? 'Yes' : 'No'}
+                      />
+                      {(dims as any).handling_notes ? <Row label="Handling notes" value={(dims as any).handling_notes} /> : null}
+                    </Stack>
+                  </Paper>
+                ) : null}
+
+                {veh && typeof veh === 'object' ? (
+                  <Paper withBorder p="xs" radius="md">
+                    <Stack gap="xs">
+                      <Text size="sm" fw={700}>Vehicle</Text>
+                      {(veh as any).make ? <Row label="Make" value={(veh as any).make} /> : null}
+                      {(veh as any).model ? <Row label="Model" value={(veh as any).model} /> : null}
+                      {(veh as any).year ? <Row label="Year" value={(veh as any).year} /> : null}
+                      {(veh as any).reg ? <Row label="Reg" value={(veh as any).reg} /> : null}
+                      {(veh as any).vin ? <Row label="VIN" value={(veh as any).vin} /> : null}
+                      <Row
+                        label="Keys received"
+                        value={(veh as any).keys_received == null ? '-' : (veh as any).keys_received ? 'Yes' : 'No'}
+                      />
+                      {(veh as any).handling_notes ? <Row label="Handling notes" value={(veh as any).handling_notes} /> : null}
+                    </Stack>
+                  </Paper>
+                ) : null}
+
+                {!cargoType && qty == null && !contents && !dims && !veh && !(m as any).pickup_address && !(m as any).pickup_contact_phone && !(m as any).notes ? (
+                  <Text size="sm" c="dimmed">No cargo details recorded.</Text>
+                ) : null}
+              </>
+            )}
           </Stack>
         </Paper>
       </Stack>

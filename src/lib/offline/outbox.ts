@@ -1,6 +1,25 @@
 
 export type OutboxStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 
+export const PACKING_CATEGORIES = [
+  'Clothing',
+  'Food & Groceries',
+  'Electronics',
+  'Household Goods',
+  'Personal Care',
+  'Documents',
+  'Other',
+] as const;
+export type PackingCategory = typeof PACKING_CATEGORIES[number];
+export type PackingItem = { category: PackingCategory; description?: string | null; qty: number };
+
+// Back-compat alias used by field intake (category is string, not the strict union)
+export type CargoContentItem = {
+  category: string;
+  description?: string;
+  qty: number;
+};
+
 export type IntakePayload = {
   customerName: string;
   phone: string;
@@ -24,6 +43,7 @@ export type IntakePayload = {
 
   // barrel / box
   quantity?: number | null;
+  cargoContents?: CargoContentItem[] | null;
 
   // crate / pallet / machinery
   weightKg?: number | null;
@@ -48,12 +68,20 @@ keysReceived?: boolean | null;
   occurredAtISO?: string | null; // when collection happened
 };
 
+export type CollectPayload = {
+  shipmentId: string;
+  trackingCode: string;
+  customerName: string;
+  destination: string;
+  occurredAtISO?: string | null;
+};
+
 export type OutboxItem = {
   id: string; // client_event_id (uuid)
-  kind: 'intake_create';
+  kind: 'intake_create' | 'collect_existing';
   status: OutboxStatus;
   created_at: string;
-  payload: IntakePayload;
+  payload: IntakePayload | CollectPayload;
   photos: File[];
   signature?: File | null;
   server?: { shipmentId: string; trackingCode: string } | null;

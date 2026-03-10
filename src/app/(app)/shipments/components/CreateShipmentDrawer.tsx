@@ -3,8 +3,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Button,
+  Collapse,
   Group,
   Modal,
+  NumberInput,
+  Select,
   SimpleGrid,
   Stack,
   Text,
@@ -12,10 +15,25 @@ import {
   ThemeIcon,
   UnstyledButton,
 } from '@mantine/core';
-import { IconCheck } from '@tabler/icons-react';
+import { IconCheck, IconChevronDown, IconChevronRight } from '@tabler/icons-react';
+
 import { notifications } from '@mantine/notifications';
 import { DestinationPicker, type OrgDestination } from '@/app/(app)/_components/DestinationPicker';
 import { countryFlag, getCountryCode } from '@/lib/countries';
+import { type PackingItem } from '@/lib/offline/outbox';
+import { PackingListEditor } from './PackingListEditor';
+
+const CARGO_TYPES = [
+  { value: 'general', label: 'General' },
+  { value: 'barrel', label: 'Barrel' },
+  { value: 'box', label: 'Box' },
+  { value: 'crate', label: 'Crate' },
+  { value: 'pallet', label: 'Pallet' },
+  { value: 'vehicle', label: 'Vehicle' },
+  { value: 'machinery', label: 'Machinery' },
+  { value: 'mixed', label: 'Mixed' },
+  { value: 'other', label: 'Other' },
+];
 
 // ── Phone field ────────────────────────────────────────────────────────────────
 
@@ -154,6 +172,10 @@ export function CreateShipmentDrawer({
   const [phone, setPhone] = useState('');
   const [destination, setDestination] = useState('');
   const [serviceType, setServiceType] = useState<'depot' | 'door_to_door'>('depot');
+  const [cargoType, setCargoType] = useState('general');
+  const [quantity, setQuantity] = useState<number | null>(null);
+  const [packingItems, setPackingItems] = useState<PackingItem[]>([]);
+  const [showCargo, setShowCargo] = useState(false);
   const [saving, setSaving] = useState(false);
   const [orgDestinations, setOrgDestinations] = useState<OrgDestination[]>([]);
   const [destLoaded, setDestLoaded] = useState(false);
@@ -193,10 +215,25 @@ export function CreateShipmentDrawer({
   const flag = destination ? countryFlag(getCountryCode(destination)) : '';
   const serviceLabel = serviceType === 'depot' ? 'Depot collection' : 'Door to Door';
 
+  const showPacking = cargoType === 'barrel' || cargoType === 'box';
+
   async function handleCreate() {
     if (!canCreate || saving) return;
     setSaving(true);
     try {
+      const cargoMeta: Record<string, unknown> = {};
+      if (showPacking) {
+        if (quantity != null) cargoMeta.quantity = quantity;
+        const contents = packingItems
+          .filter(c => c.category)
+          .map(c => ({
+            category: c.category,
+            description: c.description?.trim() || null,
+            qty: Math.max(1, c.qty),
+          }));
+        if (contents.length > 0) cargoMeta.contents = contents;
+      }
+
       const res = await fetch('/api/shipments/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -206,6 +243,8 @@ export function CreateShipmentDrawer({
           destination: destination.trim(),
           serviceType,
           phoneCountry: 'GB', // fallback; user is expected to include +CC in phone field
+          cargoType,
+          ...(Object.keys(cargoMeta).length > 0 ? { cargoMeta } : {}),
         }),
       });
       const ct = res.headers.get('content-type') ?? '';
@@ -243,6 +282,10 @@ export function CreateShipmentDrawer({
     setPhone('');
     setDestination(keepDest);
     setServiceType(keepService);
+    setCargoType('general');
+    setQuantity(null);
+    setPackingItems([]);
+    setShowCargo(false);
   }
 
   function handleViewShipment() {
@@ -294,6 +337,45 @@ export function CreateShipmentDrawer({
             </Group>
             <ServiceTypeCards value={serviceType} onChange={setServiceType} />
           </Stack>
+
+          <UnstyledButton
+            onClick={() => setShowCargo(o => !o)}
+            style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+          >
+            {showCargo
+              ? <IconChevronDown size={16} stroke={1.5} />
+              : <IconChevronRight size={16} stroke={1.5} />}
+            <Text size="sm" fw={500}>Cargo details</Text>
+          </UnstyledButton>
+
+          <Collapse in={showCargo}>
+            <Stack gap="sm">
+              <Select
+                label="Cargo type"
+                value={cargoType}
+                onChange={v => {
+                  setCargoType(v ?? 'general');
+                  setQuantity(null);
+                  setPackingItems([]);
+                }}
+                data={CARGO_TYPES}
+              />
+
+              {showPacking && (
+                <NumberInput
+                  label="Quantity"
+                  min={0}
+                  placeholder="e.g. 3"
+                  value={quantity ?? ''}
+                  onChange={v => setQuantity(typeof v === 'number' ? v : null)}
+                />
+              )}
+
+              {showPacking && (
+                <PackingListEditor items={packingItems} onChange={setPackingItems} />
+              )}
+            </Stack>
+          </Collapse>
 
           <Stack gap={4} mt="xs">
             <Button fullWidth onClick={handleCreate} loading={saving} disabled={!canCreate}>
