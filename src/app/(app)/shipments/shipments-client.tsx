@@ -286,14 +286,14 @@ export default function ShipmentsClient({
       </Group>
 
       <Paper p="md" withBorder radius="md">
-        <Group justify="space-between" mb="sm" wrap="wrap">
-          <Group wrap="wrap">
+        <Group justify="space-between" mb="sm" wrap="wrap" align="flex-end">
+          <Group wrap="wrap" style={{ flex: 1, minWidth: 0 }}>
             <TextInput
               placeholder="Search tracking, phone, customer…"
               leftSection={<IconSearch size={16} />}
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
-              w={320}
+              style={{ flex: '1 1 220px' }}
             />
 
             <Select
@@ -313,7 +313,7 @@ export default function ShipmentsClient({
                 { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
                 { value: 'delivered', label: statusLabel('delivered') },
               ]}
-              w={220}
+              style={{ flex: '1 1 160px' }}
             />
 
             <Select
@@ -324,7 +324,7 @@ export default function ShipmentsClient({
                 value: d,
                 label: d === 'all' ? 'All destinations' : d,
               }))}
-              w={220}
+              style={{ flex: '1 1 160px' }}
             />
 
             <Select
@@ -336,7 +336,7 @@ export default function ShipmentsClient({
                 { value: 'depot', label: 'Depot' },
                 { value: 'door_to_door', label: 'Door to door' },
               ]}
-              w={180}
+              style={{ flex: '1 1 130px' }}
             />
 
             <Button
@@ -389,7 +389,7 @@ export default function ShipmentsClient({
                     { value: 'awaiting_collection', label: statusLabel('awaiting_collection') },
                     { value: 'out_for_delivery', label: statusLabel('out_for_delivery') },
                   ]}
-                  w={220}
+                  style={{ flex: '1 1 180px' }}
                 />
 
                 <TextInput
@@ -397,7 +397,7 @@ export default function ShipmentsClient({
                   value={bulkNote}
                   onChange={(e) => setBulkNote(e.currentTarget.value)}
                   placeholder="e.g., Loaded onto container 12"
-                  w={260}
+                  style={{ flex: '1 1 180px' }}
                 />
 
                 <Checkbox
@@ -426,6 +426,7 @@ export default function ShipmentsClient({
             action={{ label: 'New shipment', onClick: () => setDrawerOpen(true) }}
           />
         ) : (
+        <div style={{ overflowX: 'auto' }}>
         <DataTable
           withTableBorder
           withColumnBorders
@@ -664,6 +665,7 @@ export default function ShipmentsClient({
             },
           ]}
         />
+        </div>
         )}
       </Paper>
 

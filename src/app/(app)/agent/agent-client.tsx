@@ -473,13 +473,13 @@ export function AgentClient() {
           </Text>
         </Stack>
 
-        <Group gap="xs">
+        <Group gap="xs" style={{ flex: 1, justifyContent: 'flex-end' }}>
           <TextInput
             placeholder="Search tracking…"
             leftSection={<IconSearch size={15} />}
             value={q}
             onChange={(e) => setQ(e.currentTarget.value)}
-            w={200}
+            style={{ flex: 1, maxWidth: 280 }}
           />
           <ActionIcon
             variant="light"

@@ -527,24 +527,26 @@ export function ShipmentDetailDrawer({
                   <Paper withBorder p="xs" radius="md">
                     <Stack gap="xs">
                       <Text size="sm" fw={700}>Contents</Text>
-                      <Table striped withTableBorder withColumnBorders fz="sm">
-                        <Table.Thead>
-                          <Table.Tr>
-                            <Table.Th>Category</Table.Th>
-                            <Table.Th>Description</Table.Th>
-                            <Table.Th style={{ textAlign: 'right' }}>Qty</Table.Th>
-                          </Table.Tr>
-                        </Table.Thead>
-                        <Table.Tbody>
-                          {contents.map((c, i) => (
-                            <Table.Tr key={i}>
-                              <Table.Td>{c.category}</Table.Td>
-                              <Table.Td c="dimmed">{c.description || '—'}</Table.Td>
-                              <Table.Td style={{ textAlign: 'right' }}>{c.qty}</Table.Td>
+                      <div style={{ overflowX: 'auto' }}>
+                        <Table striped withTableBorder withColumnBorders fz="sm">
+                          <Table.Thead>
+                            <Table.Tr>
+                              <Table.Th>Category</Table.Th>
+                              <Table.Th>Description</Table.Th>
+                              <Table.Th style={{ textAlign: 'right' }}>Qty</Table.Th>
                             </Table.Tr>
-                          ))}
-                        </Table.Tbody>
-                      </Table>
+                          </Table.Thead>
+                          <Table.Tbody>
+                            {contents.map((c, i) => (
+                              <Table.Tr key={i}>
+                                <Table.Td>{c.category}</Table.Td>
+                                <Table.Td c="dimmed">{c.description || '—'}</Table.Td>
+                                <Table.Td style={{ textAlign: 'right' }}>{c.qty}</Table.Td>
+                              </Table.Tr>
+                            ))}
+                          </Table.Tbody>
+                        </Table>
+                      </div>
                     </Stack>
                   </Paper>
                 ) : null}
@@ -739,7 +741,7 @@ export function ShipmentDetailDrawer({
       opened={opened}
       onClose={onClose}
       position="right"
-      size="lg"
+      size="min(100vw, 480px)"
       withCloseButton={false}
       title={drawerTitle}
     >
