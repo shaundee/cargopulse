@@ -20,11 +20,20 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   const shipmentId = String(body?.shipmentId ?? '').trim();
   const newStatus = String(body?.status ?? '').trim();
+  const userNote: string | null = body?.note != null ? String(body.note).trim() || null : null;
 
   if (!shipmentId) return NextResponse.json({ error: 'shipmentId is required' }, { status: 400 });
   if (!newStatus) return NextResponse.json({ error: 'status is required' }, { status: 400 });
 
-  const allowed = new Set(['arrived_destination', 'collected_by_customer', 'out_for_delivery']);
+  const allowed = new Set([
+    'arrived_destination',
+    'customs_processing',
+    'customs_cleared',
+    'awaiting_collection',
+    'out_for_delivery',
+    'delivered',
+    'collected_by_customer',
+  ]);
   if (!allowed.has(newStatus)) return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
 
   // membership
@@ -104,14 +113,16 @@ export async function POST(req: Request) {
   const trackingUrl = token && baseUrl ? `${baseUrl}/t/${token}` : '';
 
   // 1) Insert shipment_event
-  const note =
-    newStatus === 'arrived_destination'
-      ? 'Arrived at destination'
-      : newStatus === 'collected_by_customer'
-        ? 'Collected by customer'
-        : newStatus === 'out_for_delivery'
-          ? 'Out for delivery'
-          : '';
+  const autoNote: Record<string, string> = {
+    arrived_destination: 'Arrived at destination',
+    customs_processing: 'In customs processing',
+    customs_cleared: 'Customs cleared',
+    awaiting_collection: 'Awaiting collection',
+    out_for_delivery: 'Out for delivery',
+    delivered: 'Delivered',
+    collected_by_customer: 'Collected by customer',
+  };
+  const note = autoNote[newStatus] ?? '';
 
   const occurredAtISO = new Date().toISOString();
 
@@ -119,7 +130,7 @@ export async function POST(req: Request) {
     org_id: (shipment as any).org_id,
     shipment_id: (shipment as any).id,
     status: newStatus,
-    note,
+    note: userNote ?? note,
     occurred_at: occurredAtISO,
   });
 

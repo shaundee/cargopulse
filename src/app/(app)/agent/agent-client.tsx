@@ -5,13 +5,16 @@ import {
   ActionIcon,
   Badge,
   Button,
+  Collapse,
   Divider,
   Group,
+  List,
   Modal,
   Paper,
   SimpleGrid,
   Stack,
   Text,
+  Textarea,
   TextInput,
   ThemeIcon,
   Image,
@@ -24,11 +27,15 @@ import {
   IconMapPin,
   IconRefresh,
   IconSearch,
+  IconSignature,
   IconTruck,
   IconX,
 } from '@tabler/icons-react';
+import { SignatureModal } from '@/components/SignatureCanvas';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+type PackingContent = { category: string; description: string; qty: number };
 
 type AgentShipmentRow = {
   id: string;
@@ -39,9 +46,19 @@ type AgentShipmentRow = {
   customer_name?: string | null;
   customer_phone?: string | null;
   public_tracking_token?: string | null;
+  customs_enabled?: boolean;
+  cargo_type?: string | null;
+  cargo_meta?: { contents?: PackingContent[] } | null;
 };
 
-type AgentActionStatus = 'arrived_destination' | 'out_for_delivery' | 'collected_by_customer';
+type AgentActionStatus =
+  | 'arrived_destination'
+  | 'customs_processing'
+  | 'customs_cleared'
+  | 'awaiting_collection'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'collected_by_customer';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -70,25 +87,38 @@ function statusColor(s: string) {
   }
 }
 
-function nextActions(status: string): AgentActionStatus[] {
+function nextActions(status: string, customsEnabled = false): AgentActionStatus[] {
   switch (status) {
     case 'departed_uk':
     case 'loaded':
       return ['arrived_destination'];
     case 'arrived_destination':
+      return customsEnabled ? ['customs_processing'] : ['awaiting_collection'];
+    case 'customs_processing':
+      return ['customs_cleared'];
+    case 'customs_cleared':
+      return ['awaiting_collection'];
+    case 'awaiting_collection':
       return ['out_for_delivery', 'collected_by_customer'];
     case 'out_for_delivery':
-      return ['collected_by_customer'];
+      return ['delivered', 'collected_by_customer'];
+    case 'delivered':
+    case 'collected_by_customer':
+      return [];
     default:
       return [];
   }
 }
 
-function actionLabel(s: AgentActionStatus) {
+function actionLabel(s: AgentActionStatus): string {
   switch (s) {
-    case 'arrived_destination': return 'Mark arrived';
-    case 'out_for_delivery': return 'Out for delivery';
-    case 'collected_by_customer': return 'Collected by customer';
+    case 'arrived_destination':      return 'Mark arrived';
+    case 'customs_processing':       return 'Mark: Customs processing';
+    case 'customs_cleared':          return 'Mark: Customs cleared';
+    case 'awaiting_collection':      return 'Mark: Awaiting collection';
+    case 'out_for_delivery':         return 'Out for delivery';
+    case 'delivered':                return 'Mark delivered';
+    case 'collected_by_customer':    return 'Collected by customer';
   }
 }
 
@@ -186,9 +216,12 @@ function ShipmentCard({
   onAction: (row: AgentShipmentRow, status: AgentActionStatus) => void;
   onPod: (row: AgentShipmentRow) => void;
 }) {
-  const isDelivered = row.current_status === 'delivered';
-  const actions = nextActions(row.current_status);
-  const canPod = !isDelivered;
+  const [showContents, setShowContents] = useState(false);
+  const isTerminal = row.current_status === 'delivered' || row.current_status === 'collected_by_customer';
+  const isDelivered = isTerminal;
+  const actions = nextActions(row.current_status, row.customs_enabled ?? false);
+  const canPod = !isTerminal;
+  const contents = row.cargo_meta?.contents ?? [];
 
   return (
     <Paper
@@ -220,6 +253,36 @@ function ShipmentCard({
             <Text size="xs" c="dimmed">{fmtWhen(row.last_event_at)}</Text>
           </Stack>
         </Group>
+
+        {/* Customs contents (collapsible) */}
+        {contents.length > 0 && (
+          <>
+            <Text
+              size="xs"
+              c="blue"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setShowContents(v => !v)}
+            >
+              Customs contents ({contents.length} item{contents.length !== 1 ? 's' : ''})
+            </Text>
+            <Collapse in={showContents}>
+              <Stack gap={2} pt={2}>
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.06em' }}>
+                  Customs Contents
+                </Text>
+                <List size="xs" spacing={2}>
+                  {contents.map((c, i) => (
+                    <List.Item key={i}>
+                      <Text size="xs">
+                        {c.category}{c.description ? ` — ${c.description}` : ''} (qty: {c.qty})
+                      </Text>
+                    </List.Item>
+                  ))}
+                </List>
+              </Stack>
+            </Collapse>
+          </>
+        )}
 
         {/* Actions */}
         {(actions.length > 0 || canPod) && !isDelivered && (
@@ -275,11 +338,14 @@ export function AgentClient() {
   // Status confirm modal
   const [actionTarget, setActionTarget] = useState<{ row: AgentShipmentRow; status: AgentActionStatus } | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [actionNote, setActionNote] = useState('');
 
   // POD modal
   const [podTarget, setPodTarget] = useState<AgentShipmentRow | null>(null);
   const [receiverName, setReceiverName] = useState('');
   const [podPhoto, setPodPhoto] = useState<File | null>(null);
+  const [podSignature, setPodSignature] = useState<File | null>(null);
+  const [podSigOpen, setPodSigOpen] = useState(false);
   const [podBusy, setPodBusy] = useState(false);
 
   const load = useCallback(async (query: string) => {
@@ -323,7 +389,11 @@ export function AgentClient() {
       const res = await fetch('/api/agent/shipments/status', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ shipmentId: actionTarget.row.id, status: actionTarget.status }),
+        body: JSON.stringify({
+          shipmentId: actionTarget.row.id,
+          status: actionTarget.status,
+          note: actionNote.trim() || null,
+        }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error ?? 'Update failed');
@@ -336,6 +406,7 @@ export function AgentClient() {
         last_event_at: new Date().toISOString(),
       });
       setActionTarget(null);
+      setActionNote('');
     } catch (e: any) {
       notifications.show({ color: 'red', title: 'Update failed', message: e?.message });
     } finally {
@@ -362,6 +433,7 @@ export function AgentClient() {
       fd.set('receiverName', receiverName.trim());
       fd.set('file', podPhoto);
       fd.set('sendUpdate', 'true');
+      if (podSignature) fd.set('signature', podSignature);
 
       const res = await fetch('/api/pod/complete', { method: 'POST', body: fd });
       const json = await res.json().catch(() => null);
@@ -377,6 +449,7 @@ export function AgentClient() {
       setPodTarget(null);
       setReceiverName('');
       setPodPhoto(null);
+      setPodSignature(null);
     } catch (e: any) {
       notifications.show({ color: 'red', title: 'POD failed', message: e?.message });
     } finally {
@@ -385,8 +458,9 @@ export function AgentClient() {
   }
 
   // ── Split active / delivered ──
-  const active = rows.filter((r) => r.current_status !== 'delivered');
-  const delivered = rows.filter((r) => r.current_status === 'delivered');
+  const TERMINAL = new Set(['delivered', 'collected_by_customer']);
+  const active = rows.filter((r) => !TERMINAL.has(r.current_status));
+  const delivered = rows.filter((r) => TERMINAL.has(r.current_status));
 
   return (
     <Stack gap="md">
@@ -471,7 +545,7 @@ export function AgentClient() {
       {/* Status confirm modal */}
       <Modal
         opened={Boolean(actionTarget)}
-        onClose={() => !actionBusy && setActionTarget(null)}
+        onClose={() => { if (!actionBusy) { setActionTarget(null); setActionNote(''); } }}
         title={actionTarget ? actionLabel(actionTarget.status) : ''}
         size="sm"
         centered
@@ -487,8 +561,16 @@ export function AgentClient() {
             <Text size="sm" c="dimmed">
               Customer will be notified automatically if a template is configured.
             </Text>
+            <Textarea
+              label="Notes (optional)"
+              placeholder="e.g. Held at customs, officer requested invoice"
+              autosize
+              minRows={2}
+              value={actionNote}
+              onChange={(e) => setActionNote(e.currentTarget.value)}
+            />
             <Group justify="flex-end">
-              <Button variant="default" onClick={() => setActionTarget(null)} disabled={actionBusy}>
+              <Button variant="default" onClick={() => { setActionTarget(null); setActionNote(''); }} disabled={actionBusy}>
                 Cancel
               </Button>
               <Button onClick={confirmAction} loading={actionBusy}>
@@ -499,10 +581,17 @@ export function AgentClient() {
         )}
       </Modal>
 
+      {/* POD signature modal */}
+      <SignatureModal
+        opened={podSigOpen}
+        onClose={() => setPodSigOpen(false)}
+        onSave={(f) => { setPodSignature(f); setPodSigOpen(false); }}
+      />
+
       {/* POD modal */}
       <Modal
         opened={Boolean(podTarget)}
-        onClose={() => !podBusy && setPodTarget(null)}
+        onClose={() => { if (!podBusy) { setPodTarget(null); setPodSignature(null); } }}
         title="Deliver + capture POD"
         size="sm"
         centered
@@ -528,8 +617,34 @@ export function AgentClient() {
               capture="environment"
             />
 
+            <Stack gap={4}>
+              <Text size="sm" fw={500}>Signature</Text>
+              <Text size="xs" c="dimmed">Receiver signature recommended</Text>
+              {podSignature ? (
+                <Group gap="xs">
+                  <ThemeIcon size="sm" color="green" variant="light" radius="xl">
+                    <IconCheck size={12} />
+                  </ThemeIcon>
+                  <Text size="sm" c="green">Signature captured</Text>
+                  <Button size="xs" variant="subtle" color="gray" onClick={() => setPodSignature(null)}>
+                    Remove
+                  </Button>
+                </Group>
+              ) : (
+                <Button
+                  variant="light"
+                  color="gray"
+                  leftSection={<IconSignature size={16} />}
+                  onClick={() => setPodSigOpen(true)}
+                  fullWidth
+                >
+                  Add signature
+                </Button>
+              )}
+            </Stack>
+
             <Group justify="flex-end">
-              <Button variant="default" onClick={() => setPodTarget(null)} disabled={podBusy}>
+              <Button variant="default" onClick={() => { setPodTarget(null); setPodSignature(null); }} disabled={podBusy}>
                 Cancel
               </Button>
               <Button

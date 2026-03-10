@@ -35,6 +35,7 @@ export async function POST(req: Request) {
   const shipmentId = String(form.get('shipmentId') ?? '').trim();
   const receiverName = String(form.get('receiverName') ?? '').trim();
   const file = form.get('file');
+  const signatureFile = form.get('signature');
 
   const sendUpdateRaw = form.get('sendUpdate');
   const sendUpdate = sendUpdateRaw == null ? true : String(sendUpdateRaw) === 'true';
@@ -130,6 +131,28 @@ export async function POST(req: Request) {
     });
 
   if (podErr) return NextResponse.json({ error: podErr.message }, { status: 400 });
+
+  // Upload POD signature (optional, best-effort)
+  if (signatureFile && signatureFile instanceof Blob) {
+    try {
+      const sigBytes = new Uint8Array(await signatureFile.arrayBuffer());
+      const sigPath = `org/${orgId}/shipments/${shipmentId}/pod_signature.png`;
+      const { error: sigUpErr } = await supabase.storage
+        .from('pod')
+        .upload(sigPath, sigBytes, { contentType: 'image/png', upsert: true });
+      if (!sigUpErr) {
+        await supabase.from('shipment_assets').insert({
+          org_id: orgId,
+          shipment_id: shipmentId,
+          kind: 'pod_signature',
+          path: sigPath,
+          created_by: user.id,
+        });
+      }
+    } catch {
+      // signature upload is non-fatal
+    }
+  }
 
   // Replace POD only
   if (alreadyDelivered) {

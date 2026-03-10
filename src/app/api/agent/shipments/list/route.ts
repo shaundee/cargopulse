@@ -54,6 +54,19 @@ export async function GET(req: Request) {
     if (!allowedDestinationNames.length) return NextResponse.json({ shipments: [] });
   }
 
+  // --- destination settings (enabled_statuses) for customs_enabled flag ---
+  const { data: destSettings } = await supabase
+    .from('org_destinations')
+    .select('name, enabled_statuses')
+    .eq('org_id', member.org_id);
+
+  const destSettingsMap = new Map<string, string[]>(
+    (destSettings ?? []).map((d: any) => [
+      String(d.name).toLowerCase(),
+      Array.isArray(d.enabled_statuses) ? (d.enabled_statuses as string[]) : [],
+    ])
+  );
+
   // --- base query ---
   let queryBuilder = supabase
     .from('shipments')
@@ -67,6 +80,8 @@ export async function GET(req: Request) {
         current_status,
         last_event_at,
         public_tracking_token,
+        cargo_type,
+        cargo_meta,
         customer:customers(name, phone, phone_e164)
       `
     )
@@ -94,6 +109,9 @@ export async function GET(req: Request) {
 
   const shipments = (data ?? []).map((s: any) => {
     const c = Array.isArray(s.customer) ? s.customer[0] : s.customer;
+    const destKey = String(s.destination ?? '').toLowerCase();
+    const enabledStatuses = destSettingsMap.get(destKey) ?? [];
+    const customs_enabled = enabledStatuses.includes('customs_processing');
     return {
       id: s.id,
       tracking_code: s.tracking_code,
@@ -103,6 +121,9 @@ export async function GET(req: Request) {
       public_tracking_token: s.public_tracking_token ?? null,
       customer_name: c?.name ?? null,
       customer_phone: c?.phone_e164 ?? c?.phone ?? null,
+      customs_enabled,
+      cargo_type: s.cargo_type ?? null,
+      cargo_meta: s.cargo_meta ?? null,
     };
   });
 
